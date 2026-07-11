@@ -31,6 +31,12 @@ namespace Shaderpark.Scrabble
             {
                 GameObject go = new GameObject("CoherenceBridge");
                 bridge = go.AddComponent<CoherenceBridge>();
+                // Without a live query, a client expresses interest in no entities and
+                // therefore never receives any -- the guest would connect but never see
+                // the host's ScrabbleNetworkMatch. This is a board game, not a spatial
+                // one, so use a huge extent to take in the whole (single-entity) room.
+                CoherenceLiveQuery query = go.AddComponent<CoherenceLiveQuery>();
+                query.Extent = 1_000_000f;
             }
             return bridge;
         }
