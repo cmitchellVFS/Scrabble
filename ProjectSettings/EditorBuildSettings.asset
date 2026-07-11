@@ -7,3 +7,4 @@ EditorBuildSettings:
   m_Scenes: []
   m_configObjects:
     com.unity.dt.app-ui: {fileID: 11400000, guid: 1b1c20d82303e4b5781c3ef50ac1449f, type: 2}
+    io.coherence.simulator.build.options: {fileID: 11400000, guid: f5ea54070cd26a840b871b80aae66f9c, type: 2}

@@ -104,3 +104,9 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# Coherence settings contain portal_token / runtime_key credentials
+/ProjectSettings/CoherenceSettings.asset
+
+# Claude Code machine-local settings
+.claude/settings.local.json

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "UnityMCP": {
+      "type": "stdio",
+      "command": "C:\\Users\\mitch\\.venvs\\unity-mcp\\Scripts\\mcp-for-unity.exe"
+    }
+  }
+}

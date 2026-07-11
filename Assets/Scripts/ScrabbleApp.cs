@@ -22,7 +22,7 @@ public class ScrabbleApp : MonoBehaviour
         DontDestroyOnLoad(go);
     }
 
-    private enum ScreenState { Loading, Start, Playing }
+    private enum ScreenState { Loading, Start, MpLobby, Playing }
 
     // Colours (ARGB hex).
     private static readonly Color BG = Hex(0xFF0E1623);
@@ -68,6 +68,16 @@ public class ScrabbleApp : MonoBehaviour
 
     // Quit confirmation (PC only, triggered by Esc).
     private bool showQuitConfirm;
+
+    // Multiplayer (Coherence). "Host" runs the authoritative PvpGame locally;
+    // "Guest" only renders synced state and its own privately-delivered rack.
+    private bool multiplayer;
+    private NetworkSession netSession;
+    private ScrabbleNetworkMatch net;
+    private string roomCodeInput = "";
+    private readonly Board netGuestBoard = new Board();
+    private bool netAwaitingResult;
+    private int netLastErrorSeq;
 
     // Background load.
     private volatile bool loadDone;
@@ -191,6 +201,8 @@ public class ScrabbleApp : MonoBehaviour
         }
 #endif
 
+        if (multiplayer) UpdateMultiplayer();
+
         if (aiReady && !animating)
         {
             aiReady = false;
@@ -210,6 +222,40 @@ public class ScrabbleApp : MonoBehaviour
             animating = false;
             CommitAi(aiPendingMove);
         }
+    }
+
+    private void UpdateMultiplayer()
+    {
+        if (net == null && netSession != null) net = netSession.Match;
+        if (net == null) return;
+
+        if (net.IsHost && !net.matchStarted && net.GuestConnected)
+        {
+            net.HostStartMatch(dict, System.DateTime.Now.Ticks);
+        }
+
+        if (net.matchStarted && screen == ScreenState.MpLobby)
+        {
+            InitUiState();
+            screen = ScreenState.Playing;
+        }
+
+        if (netAwaitingResult)
+        {
+            if (net.errorSeq != netLastErrorSeq)
+            {
+                netLastErrorSeq = net.errorSeq;
+                netAwaitingResult = false;
+                Toast(net.lastError);
+            }
+            else if (!ActiveMyTurn() || ActiveOver())
+            {
+                netAwaitingResult = false;
+                RecallAll();
+            }
+        }
+
+        busy = !ActiveMyTurn() || netAwaitingResult;
     }
 
     private void BeginAiAnimation(Move m)
@@ -254,6 +300,107 @@ public class ScrabbleApp : MonoBehaviour
     }
 
     // ------------------------------------------------------------------
+    // Multiplayer state accessors -- the shared gameplay UI/logic below reads
+    // through these instead of touching `game` or `net` directly, so the same
+    // Draw/handler code works for both single-player and multiplayer.
+    // ------------------------------------------------------------------
+
+    private Board ActiveBoard()
+    {
+        if (!multiplayer) return game.board;
+        if (net.IsHost) return net.HostGame.board;
+        ScrabbleNetworkMatch.UnpackBoard(net.packedLetters, net.packedBlanks, netGuestBoard);
+        return netGuestBoard;
+    }
+
+    private List<char> ActiveRack()
+    {
+        if (!multiplayer) return game.humanRack;
+        return net.IsHost ? net.HostGame.RackOf(true) : net.myRack;
+    }
+
+    private bool ActiveMyTurn()
+    {
+        if (!multiplayer) return game.humanTurn;
+        return net.IsHost ? net.turnA : !net.turnA;
+    }
+
+    private bool ActiveOver()
+    {
+        return multiplayer ? net.over : game.over;
+    }
+
+    private int ActiveMyScore()
+    {
+        if (!multiplayer) return game.humanScore;
+        return net.IsHost ? net.scoreA : net.scoreB;
+    }
+
+    private int ActiveOppScore()
+    {
+        if (!multiplayer) return game.aiScore;
+        return net.IsHost ? net.scoreB : net.scoreA;
+    }
+
+    private int ActiveBagSize()
+    {
+        return multiplayer ? net.bagCount : game.BagSize();
+    }
+
+    private string ActiveLastEvent()
+    {
+        return multiplayer ? net.lastEvent : game.lastEvent;
+    }
+
+    private string ActiveTurnLabel()
+    {
+        if (ActiveOver()) return "Game over";
+        if (!multiplayer) return busy ? "AI thinking…" : "Your turn";
+        if (netAwaitingResult) return "Sending…";
+        return ActiveMyTurn() ? "Your turn" : "Opponent's turn";
+    }
+
+    // ------------------------------------------------------------------
+    // Multiplayer lobby: create/join a room by a short shareable code.
+    // ------------------------------------------------------------------
+
+    private void EnsureNetSession()
+    {
+        if (netSession != null) return;
+        GameObject go = new GameObject("NetworkSession");
+        netSession = go.AddComponent<NetworkSession>();
+        multiplayer = true;
+    }
+
+    private void StartHosting()
+    {
+        EnsureNetSession();
+        netSession.HostRoom(roomCodeInput.Trim().ToUpperInvariant());
+    }
+
+    private void StartJoining()
+    {
+        EnsureNetSession();
+        netSession.JoinRoomByCode(roomCodeInput.Trim().ToUpperInvariant());
+    }
+
+    private void LeaveMultiplayer()
+    {
+        if (netSession != null)
+        {
+            netSession.Disconnect();
+            Destroy(netSession.gameObject);
+        }
+        netSession = null;
+        net = null;
+        multiplayer = false;
+        netAwaitingResult = false;
+        netLastErrorSeq = 0;
+        roomCodeInput = "";
+        screen = ScreenState.Start;
+    }
+
+    // ------------------------------------------------------------------
     // GUI
     // ------------------------------------------------------------------
 
@@ -273,11 +420,13 @@ public class ScrabbleApp : MonoBehaviour
         {
             case ScreenState.Loading: DrawLoading(); break;
             case ScreenState.Start: DrawStart(); break;
+            case ScreenState.MpLobby: DrawMpLobby(); break;
             case ScreenState.Playing: DrawGame(); break;
         }
         if (showBlank) DrawBlankChooser();
         if (showDef) DrawDefinition();
-        if (screen == ScreenState.Playing && game != null && game.over) DrawGameOver();
+        bool isGameOver = multiplayer ? (net != null && net.over) : (game != null && game.over);
+        if (screen == ScreenState.Playing && isGameOver) DrawGameOver();
         if (showQuitConfirm) DrawQuitConfirm();
         if (toast.Length > 0) DrawToast();
 
@@ -351,6 +500,11 @@ public class ScrabbleApp : MonoBehaviour
             }
             y += 12 * U;
         }
+        if (GUI.Button(new Rect(w / 2 - 25 * U, y, 50 * U, 10 * U), "Play Online", Btn((int)(4.2f * U))))
+        {
+            screen = ScreenState.MpLobby;
+        }
+        y += 12 * U;
         GUI.Label(new Rect(8 * U, y, w - 16 * U, VH - y),
             "How to play\n\n" +
             "Tap a rack tile, then tap an empty board square to place it. Tap a placed " +
@@ -361,15 +515,76 @@ public class ScrabbleApp : MonoBehaviour
             Label((int)(3 * U), MUTED, TextAnchor.UpperLeft, false));
     }
 
+    private void DrawMpLobby()
+    {
+        float w = VW;
+        float y = 10 * U;
+        GUI.Label(new Rect(0, y, w, 10 * U), "Play Online", Label((int)(6 * U), TEXT, TextAnchor.MiddleCenter, true));
+        y += 14 * U;
+
+        bool connecting = netSession != null && netSession.IsConnecting;
+
+        if (net == null)
+        {
+            GUI.Label(new Rect(10 * U, y, w - 20 * U, 5 * U), "Room code",
+                Label((int)(3.6f * U), ACCENT, TextAnchor.MiddleCenter, false));
+            y += 6 * U;
+            GUIStyle field = new GUIStyle(GUI.skin.textField);
+            field.fontSize = (int)(5 * U);
+            field.alignment = TextAnchor.MiddleCenter;
+            string typed = GUI.TextField(new Rect(w / 2 - 20 * U, y, 40 * U, 9 * U), roomCodeInput, field);
+            if (typed.Length <= 6) roomCodeInput = typed.ToUpperInvariant();
+            y += 13 * U;
+
+            GUI.enabled = !connecting && roomCodeInput.Trim().Length > 0;
+            if (GUI.Button(new Rect(w / 2 - 25 * U, y, 50 * U, 10 * U), "Host New Room", Btn((int)(4.2f * U))))
+            {
+                StartHosting();
+            }
+            y += 12 * U;
+            if (GUI.Button(new Rect(w / 2 - 25 * U, y, 50 * U, 10 * U), "Join Room", Btn((int)(4.2f * U))))
+            {
+                StartJoining();
+            }
+            y += 12 * U;
+            GUI.enabled = true;
+        }
+
+        if (netSession != null && netSession.ErrorText != null)
+        {
+            GUI.Label(new Rect(6 * U, y, w - 12 * U, 10 * U), netSession.ErrorText,
+                Label((int)(3.4f * U), Hex(0xFFE05555), TextAnchor.MiddleCenter, false));
+            y += 12 * U;
+        }
+        else if (connecting)
+        {
+            GUI.Label(new Rect(6 * U, y, w - 12 * U, 10 * U), netSession.StatusText,
+                Label((int)(3.4f * U), MUTED, TextAnchor.MiddleCenter, false));
+            y += 12 * U;
+        }
+        else if (net != null && !net.matchStarted)
+        {
+            GUI.Label(new Rect(6 * U, y, w - 12 * U, 10 * U),
+                net.IsHost ? "Waiting for opponent to join..." : "Waiting for host to start...",
+                Label((int)(3.4f * U), MUTED, TextAnchor.MiddleCenter, false));
+            y += 12 * U;
+        }
+
+        if (GUI.Button(new Rect(w / 2 - 25 * U, VH - 14 * U, 50 * U, 10 * U), "Back", Btn((int)(3.8f * U))))
+        {
+            LeaveMultiplayer();
+        }
+    }
+
     private void DrawGame()
     {
         float w = VW;
         float headerH = 11 * U;
         GUI.Label(new Rect(2 * U, 0, w - 4 * U, 6 * U),
-            "You " + game.humanScore + "   AI " + game.aiScore + "   Bag " + game.BagSize() +
-            "   " + (game.over ? "Game over" : (busy ? "AI thinking…" : "Your turn")),
+            "You " + ActiveMyScore() + "   " + (multiplayer ? "Opp " : "AI ") + ActiveOppScore() +
+            "   Bag " + ActiveBagSize() + "   " + ActiveTurnLabel(),
             Label((int)(3.6f * U), TEXT, TextAnchor.MiddleLeft, true));
-        GUI.Label(new Rect(2 * U, 6 * U, w - 4 * U, 5 * U), game.lastEvent,
+        GUI.Label(new Rect(2 * U, 6 * U, w - 4 * U, 5 * U), ActiveLastEvent(),
             Label((int)(3 * U), ACCENT, TextAnchor.MiddleLeft, false));
 
         float controlsH = 22 * U;
@@ -393,13 +608,14 @@ public class ScrabbleApp : MonoBehaviour
 
     private void DrawBoard(float bx, float by, float cell)
     {
+        Board board = ActiveBoard();
         // Visuals first.
         for (int r = 0; r < 15; r++)
         {
             for (int c = 0; c < 15; c++)
             {
                 Rect rect = new Rect(bx + c * cell, by + r * cell, cell - 1, cell - 1);
-                char committed = game.board.LetterAt(r, c);
+                char committed = board.LetterAt(r, c);
                 char prov = provChar[r, c];
                 if (committed == (char)0 && prov == (char)0)
                 {
@@ -413,7 +629,7 @@ public class ScrabbleApp : MonoBehaviour
                 {
                     bool isProv = prov != (char)0;
                     char ch = isProv ? prov : committed;
-                    bool blank = isProv ? provBlank[r, c] : game.board.IsBlankAt(r, c);
+                    bool blank = isProv ? provBlank[r, c] : board.IsBlankAt(r, c);
                     DrawTile(rect, ch, blank, isProv, cell);
                 }
             }
@@ -469,7 +685,8 @@ public class ScrabbleApp : MonoBehaviour
 
     private void DrawRack(float top, float w)
     {
-        int n = game.humanRack.Count;
+        List<char> rack = ActiveRack();
+        int n = rack.Count;
         float size = w / 8.5f;
         float gap = size * 0.12f;
         float totalW = n * size + (n - 1) * gap;
@@ -477,7 +694,7 @@ public class ScrabbleApp : MonoBehaviour
         for (int i = 0; i < n; i++)
         {
             Rect rect = new Rect(x0 + i * (size + gap), top, size, size);
-            char ch = game.humanRack[i];
+            char ch = rack[i];
             bool used = usedIdx.Contains(i);
             bool sel = selectedRack == i;
             bool exch = exchangeMode && exchangeSel.Contains(i);
@@ -513,7 +730,7 @@ public class ScrabbleApp : MonoBehaviour
         float bw = (w - 5 * U) / 4f;
         float bh = 9 * U;
         float x = 1 * U;
-        bool can = !busy && !animating && !ModalActive && !game.over && game.humanTurn;
+        bool can = !busy && !animating && !ModalActive && !ActiveOver() && ActiveMyTurn();
         GUI.enabled = can && !exchangeMode && !arrangeMode;
         if (GUI.Button(new Rect(x, y, bw, bh), "Submit", Btn(fs))) OnSubmit();
         if (GUI.Button(new Rect(x + bw + U, y, bw, bh), "Recall", Btn(fs))) RecallAll();
@@ -527,8 +744,12 @@ public class ScrabbleApp : MonoBehaviour
         if (GUI.Button(new Rect(x, y2, bw3, bh), "Pass", Btn(fs))) OnPass();
         GUI.enabled = can && !arrangeMode;
         if (GUI.Button(new Rect(x + bw3 + U, y2, bw3, bh), exchangeMode ? "Confirm" : "Exchange", Btn(fs))) OnExchange();
-        GUI.enabled = !busy && !animating && !ModalActive;
-        if (GUI.Button(new Rect(x + 2 * (bw3 + U), y2, bw3, bh), "New Game", Btn(fs))) screen = ScreenState.Start;
+        GUI.enabled = !ModalActive; // leaving is always allowed, even mid-turn
+        if (GUI.Button(new Rect(x + 2 * (bw3 + U), y2, bw3, bh), "New Game", Btn(fs)))
+        {
+            if (multiplayer) LeaveMultiplayer();
+            else screen = ScreenState.Start;
+        }
         GUI.enabled = true;
     }
 
@@ -539,15 +760,15 @@ public class ScrabbleApp : MonoBehaviour
     private void HandleCellTap(int r, int c)
     {
         if (exchangeMode || arrangeMode) return;
-        if (provChar[r, c] == (char)0 && !game.board.IsEmptyCell(r, c))
+        if (provChar[r, c] == (char)0 && !ActiveBoard().IsEmptyCell(r, c))
         {
             ShowDefinition(r, c);
             return;
         }
-        if (game.over || !game.humanTurn) return;
+        if (ActiveOver() || !ActiveMyTurn()) return;
         if (provChar[r, c] != (char)0) { RecallCell(r, c); return; }
         if (selectedRack < 0) { Toast("Pick a tile from your rack first"); return; }
-        char ch = game.humanRack[selectedRack];
+        char ch = ActiveRack()[selectedRack];
         if (ch == '?')
         {
             showBlank = true; blankR = r; blankC = c; blankRackIdx = selectedRack;
@@ -560,18 +781,19 @@ public class ScrabbleApp : MonoBehaviour
 
     private void OnRackTap(int idx)
     {
-        if (game.over || !game.humanTurn) return;
+        if (ActiveOver() || !ActiveMyTurn()) return;
+        List<char> rack = ActiveRack();
         if (arrangeMode)
         {
             if (arrangePick < 0) arrangePick = idx;
             else if (arrangePick == idx) arrangePick = -1;
             else
             {
-                char t = game.humanRack[arrangePick];
-                game.humanRack.RemoveAt(arrangePick);
+                char t = rack[arrangePick];
+                rack.RemoveAt(arrangePick);
                 int insert = (arrangePick < idx) ? idx - 1 : idx;
-                if (insert > game.humanRack.Count) insert = game.humanRack.Count;
-                game.humanRack.Insert(insert, t);
+                if (insert > rack.Count) insert = rack.Count;
+                rack.Insert(insert, t);
                 arrangePick = -1;
             }
             return;
@@ -632,15 +854,26 @@ public class ScrabbleApp : MonoBehaviour
             m.pl[i] = provChar[p[0], p[1]];
             m.pb[i] = provBlank[p[0], p[1]];
         }
+
+        if (multiplayer)
+        {
+            if (net.IsHost)
+            {
+                Board.Validation hv = net.HostSubmit(true, m);
+                if (!hv.ok) { Toast(hv.error); return; }
+                RecallAll();
+            }
+            else
+            {
+                net.GuestSubmitMove(m);
+                netAwaitingResult = true;
+            }
+            return;
+        }
+
         Board.Validation v = game.TrySubmitHuman(m);
         if (!v.ok) { Toast(v.error); return; }
-        for (int i = 0; i < n; i++)
-        {
-            int[] p = provList[i];
-            provChar[p[0], p[1]] = (char)0;
-            provBlank[p[0], p[1]] = false;
-        }
-        provList.Clear(); usedIdx.Clear(); selectedRack = -1;
+        RecallAll();
         EndHumanTurn();
     }
 
@@ -649,7 +882,7 @@ public class ScrabbleApp : MonoBehaviour
         if (provList.Count > 0) { Toast("Recall your tiles before shuffling"); return; }
         // Fisher-Yates on the rack.
         System.Random rr = new System.Random();
-        List<char> rack = game.humanRack;
+        List<char> rack = ActiveRack();
         for (int i = rack.Count - 1; i > 0; i--)
         {
             int j = rr.Next(i + 1);
@@ -673,6 +906,12 @@ public class ScrabbleApp : MonoBehaviour
     private void OnPass()
     {
         RecallAll();
+        if (multiplayer)
+        {
+            if (net.IsHost) net.HostPass(true);
+            else { net.GuestPass(); netAwaitingResult = true; }
+            return;
+        }
         game.PassHuman();
         EndHumanTurn();
     }
@@ -682,7 +921,7 @@ public class ScrabbleApp : MonoBehaviour
         if (!exchangeMode)
         {
             if (provList.Count > 0) { Toast("Recall your tiles first"); return; }
-            if (game.BagSize() == 0) { Toast("Bag is empty — cannot exchange"); return; }
+            if (ActiveBagSize() == 0) { Toast("Bag is empty — cannot exchange"); return; }
             exchangeMode = true; exchangeSel.Clear(); selectedRack = -1;
             arrangeMode = false; arrangePick = -1;
             Toast("Tap tiles to swap, then press Confirm");
@@ -692,6 +931,13 @@ public class ScrabbleApp : MonoBehaviour
         int[] idx = new int[exchangeSel.Count];
         exchangeSel.CopyTo(idx);
         exchangeMode = false; exchangeSel.Clear();
+
+        if (multiplayer)
+        {
+            if (net.IsHost) net.HostExchange(true, idx);
+            else { net.GuestExchange(idx); netAwaitingResult = true; }
+            return;
+        }
         bool ok = game.ExchangeHuman(idx);
         if (ok) EndHumanTurn();
     }
@@ -702,16 +948,17 @@ public class ScrabbleApp : MonoBehaviour
 
     private string WordAt(int r, int c, int dr, int dc)
     {
-        if (game.board.IsEmptyCell(r, c)) return null;
+        Board board = ActiveBoard();
+        if (board.IsEmptyCell(r, c)) return null;
         int sr = r, sc = c;
-        while (InB(sr - dr, sc - dc) && !game.board.IsEmptyCell(sr - dr, sc - dc)) { sr -= dr; sc -= dc; }
+        while (InB(sr - dr, sc - dc) && !board.IsEmptyCell(sr - dr, sc - dc)) { sr -= dr; sc -= dc; }
         int er = r, ec = c;
-        while (InB(er + dr, ec + dc) && !game.board.IsEmptyCell(er + dr, ec + dc)) { er += dr; ec += dc; }
+        while (InB(er + dr, ec + dc) && !board.IsEmptyCell(er + dr, ec + dc)) { er += dr; ec += dc; }
         int len = Mathf.Abs(er - sr) + Mathf.Abs(ec - sc) + 1;
         if (len < 2) return null;
         StringBuilder sb = new StringBuilder();
         int cr = sr, cc = sc;
-        for (int i = 0; i < len; i++) { sb.Append(game.board.LetterAt(cr, cc)); cr += dr; cc += dc; }
+        for (int i = 0; i < len; i++) { sb.Append(board.LetterAt(cr, cc)); cr += dr; cc += dc; }
         return sb.ToString();
     }
 
@@ -798,17 +1045,19 @@ public class ScrabbleApp : MonoBehaviour
         float w = VW;
         Rect box = new Rect(w * 0.1f, VH * 0.32f, w * 0.8f, VH * 0.32f);
         DrawRect(box, CARD);
-        string result = game.humanScore > game.aiScore ? "You win!" :
-            (game.aiScore > game.humanScore ? "AI wins." : "It's a tie.");
+        int myScore = ActiveMyScore();
+        int oppScore = ActiveOppScore();
+        string result = myScore > oppScore ? "You win!" :
+            (oppScore > myScore ? (multiplayer ? "Opponent wins." : "AI wins.") : "It's a tie.");
         GUI.Label(new Rect(box.x, box.y + 3 * U, box.width, 8 * U), result,
             Label((int)(5.5f * U), ACCENT, TextAnchor.MiddleCenter, true));
         GUI.Label(new Rect(box.x, box.y + 12 * U, box.width, 8 * U),
-            "You " + game.humanScore + "   ·   AI " + game.aiScore,
+            "You " + myScore + "   ·   " + (multiplayer ? "Opp " : "AI ") + oppScore,
             Label((int)(4 * U), TEXT, TextAnchor.MiddleCenter, false));
         if (GUI.Button(new Rect(box.x + box.width / 2 - 18 * U, box.y + box.height - 11 * U, 36 * U, 9 * U), "New Game", Btn((int)(3.8f * U))))
         {
-            DeleteSave();
-            screen = ScreenState.Start;
+            if (multiplayer) LeaveMultiplayer();
+            else { DeleteSave(); screen = ScreenState.Start; }
         }
     }
 

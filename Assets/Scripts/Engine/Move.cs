@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text;
 
 namespace Shaderpark.Scrabble
@@ -26,6 +27,17 @@ namespace Shaderpark.Scrabble
         public int TilesPlaced()
         {
             return pr.Length;
+        }
+
+        /// <summary>Removes the tiles this move used (by letter, blanks as '?') from a rack.</summary>
+        public void RemoveFromRack(List<char> rack)
+        {
+            for (int i = 0; i < pr.Length; i++)
+            {
+                char want = pb[i] ? '?' : pl[i];
+                int idx = rack.IndexOf(want);
+                if (idx >= 0) rack.RemoveAt(idx);
+            }
         }
 
         public static Move Pass()

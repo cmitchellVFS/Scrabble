@@ -1,0 +1,24 @@
+component _bad74b39548e2dc4e99b4646980137dd_4640782767086971833 [id "18"]
+  packedLetters String 
+  packedBlanks String 
+  scoreA Int [range-min "-2147483648", range-max "2147483647"]
+  scoreB Int [range-min "-2147483648", range-max "2147483647"]
+  turnA Bool 
+  over Bool 
+  bagCount Int [range-min "-2147483648", range-max "2147483647"]
+  lastEvent String 
+  matchStarted Bool 
+  lastError String 
+  errorSeq Int [range-min "-2147483648", range-max "2147483647"]
+
+command _bad74b39548e2dc4e99b4646980137dd_16edea1558054b5ca31b97a6c1e299dc [id "6", routing "All"]
+
+command _bad74b39548e2dc4e99b4646980137dd_4c904b5f0bc54a7dbd19f5efa033cdc2 [id "7", routing "All"]
+  data String 
+
+command _bad74b39548e2dc4e99b4646980137dd_b4f9588652044c12b4caff43c69ee91e [id "8", routing "All"]
+  tiles String 
+
+command _bad74b39548e2dc4e99b4646980137dd_c532ee72ca0f451cae7418820c91185c [id "9", routing "All"]
+  data String 
+

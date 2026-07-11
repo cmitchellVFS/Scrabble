@@ -1,8 +1,10 @@
 {
   "dependencies": {
-    "com.unity.ai.assistant": "2.13.0-pre.2",
+    "com.coplaydev.unity-mcp": "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#main",
     "com.unity.ai.inference": "2.6.1",
+    "com.unity.multiplayer.playmode": "2.0.2",
     "com.unity.ugui": "2.0.0",
+    "io.coherence.sdk": "file:../LocalPackages/io.coherence.sdk-2.2.0-pre.2.tgz",
     "com.unity.modules.androidjni": "1.0.0",
     "com.unity.modules.imgui": "1.0.0",
     "com.unity.modules.jsonserialize": "1.0.0",

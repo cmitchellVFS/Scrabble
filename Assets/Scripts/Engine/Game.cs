@@ -41,7 +41,7 @@ namespace Shaderpark.Scrabble
             Board.Validation v = board.ValidateHuman(m, dict);
             if (!v.ok) return v;
             board.Apply(m);
-            RemoveFromRack(humanRack, m);
+            m.RemoveFromRack(humanRack);
             humanScore += v.score;
             bag.Fill(humanRack, 7);
             scoreless = 0;
@@ -119,7 +119,7 @@ namespace Shaderpark.Scrabble
             {
                 board.Score(m);
                 board.Apply(m);
-                RemoveFromRack(aiRack, m);
+                m.RemoveFromRack(aiRack);
                 aiScore += m.score;
                 bag.Fill(aiRack, 7);
                 scoreless = 0;
@@ -172,16 +172,6 @@ namespace Shaderpark.Scrabble
                 if (ch != '?') v += ScrabbleData.Value(ch);
             }
             return v;
-        }
-
-        private void RemoveFromRack(List<char> rack, Move m)
-        {
-            for (int i = 0; i < m.pr.Length; i++)
-            {
-                char want = m.pb[i] ? '?' : m.pl[i];
-                int idx = rack.IndexOf(want);
-                if (idx >= 0) rack.RemoveAt(idx);
-            }
         }
 
         // ------------------------------------------------------------------
