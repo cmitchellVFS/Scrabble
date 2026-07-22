@@ -819,8 +819,10 @@ public class ScrabbleApp : MonoBehaviour
                 DrawTile(new Rect(x, y, cell - 1, cell - 1), (char)a[2], a[3] > 0.5f, true, cell);
             }
         }
-        // Invisible click buttons on top.
-        if (!busy && !animating && !ModalActive)
+        // Invisible click buttons on top. Not gated by `busy`, so a played word
+        // can be tapped for its meaning even on the opponent's/AI's turn --
+        // HandleCellTap still blocks placement/recall when it isn't your turn.
+        if (!animating && !ModalActive && !scoreAnimActive)
         {
             for (int r = 0; r < 15; r++)
             {
