@@ -76,6 +76,19 @@ public class ScrabbleApp : MonoBehaviour
     private string lastCapturedEvent = "";
     private Vector2 historyScroll;
 
+    // Drag-to-place. dragRackIdx is the rack tile currently held (-1 = none);
+    // dragMoved distinguishes a drag from a plain click, so both the existing
+    // tap-to-select/tap-to-place flow and the new drag flow work together.
+    // Board/rack geometry is captured while drawing so the pointer can be
+    // hit-tested against squares and tiles from the event handler.
+    private int dragRackIdx = -1;
+    private bool dragMoved;
+    private Vector2 dragPos;
+    private int dragControlId;
+    private float geoBoardX, geoBoardY, geoCell;
+    private float geoRackX0, geoRackTop, geoRackSize, geoRackGap;
+    private int geoRackCount;
+
     // Quit confirmation (PC only, triggered by Esc).
     private bool showQuitConfirm;
 
@@ -609,6 +622,11 @@ public class ScrabbleApp : MonoBehaviour
 
     private void DrawGame()
     {
+        // Drag gesture first: it grabs Event.current before the board/rack
+        // buttons below and reserves the first control id of the frame, so its
+        // id stays stable regardless of the conditionally-drawn controls after.
+        HandleTileDrag();
+
         float w = VW;
         float headerH = 11 * U;
         GUI.Label(new Rect(2 * U, 0, w - 4 * U, 6 * U),
@@ -633,6 +651,7 @@ public class ScrabbleApp : MonoBehaviour
         float cell = boardSize / 15f;
         float bx = (w - boardSize) / 2f;
         float by = headerH;
+        geoBoardX = bx; geoBoardY = by; geoCell = cell;
 
         DrawBoard(bx, by, cell);
 
@@ -643,6 +662,9 @@ public class ScrabbleApp : MonoBehaviour
         // Controls.
         float cy = rackTop + rackH;
         DrawControls(cy, w);
+
+        // Floating tile + target highlight, painted on top of everything.
+        DrawDragTile();
     }
 
     private void DrawBoard(float bx, float by, float cell)
@@ -730,11 +752,13 @@ public class ScrabbleApp : MonoBehaviour
         float gap = size * 0.12f;
         float totalW = n * size + (n - 1) * gap;
         float x0 = (w - totalW) / 2f;
+        geoRackX0 = x0; geoRackTop = top; geoRackSize = size; geoRackGap = gap; geoRackCount = n;
         for (int i = 0; i < n; i++)
         {
             Rect rect = new Rect(x0 + i * (size + gap), top, size, size);
             char ch = rack[i];
-            bool used = usedIdx.Contains(i);
+            // The dragged tile is drawn floating under the pointer instead.
+            bool used = usedIdx.Contains(i) || (dragRackIdx == i && dragMoved);
             bool sel = selectedRack == i;
             bool exch = exchangeMode && exchangeSel.Contains(i);
             bool pick = arrangeMode && arrangePick == i;
@@ -795,6 +819,121 @@ public class ScrabbleApp : MonoBehaviour
     // ------------------------------------------------------------------
     // Interaction
     // ------------------------------------------------------------------
+
+    // Drag-to-place: press a rack tile, drag onto a board square, release to
+    // drop. A press-and-release without movement falls through to OnRackTap so
+    // the original tap-to-select gesture still works. Runs before the board and
+    // rack buttons so it can claim (Event.Use) the events it handles, which
+    // stops those buttons from also firing on the same drag.
+    private void HandleTileDrag()
+    {
+        Event e = Event.current;
+        // Always allocate an id (even when a drag can't start) so this control's
+        // id doesn't shift between frames and break an in-progress drag.
+        int id = GUIUtility.GetControlID(FocusType.Passive);
+        dragControlId = id;
+        bool canDrag = !busy && !animating && !ModalActive && !exchangeMode &&
+                       !arrangeMode && !ActiveOver() && ActiveMyTurn();
+
+        switch (e.GetTypeForControl(id))
+        {
+            case EventType.MouseDown:
+                if (canDrag && e.button == 0)
+                {
+                    int hit = RackIndexAt(e.mousePosition);
+                    if (hit >= 0 && !usedIdx.Contains(hit))
+                    {
+                        dragRackIdx = hit;
+                        dragMoved = false;
+                        dragPos = e.mousePosition;
+                        GUIUtility.hotControl = id;
+                        e.Use();
+                    }
+                }
+                break;
+            case EventType.MouseDrag:
+                if (GUIUtility.hotControl == id && dragRackIdx >= 0)
+                {
+                    dragPos = e.mousePosition;
+                    dragMoved = true;
+                    e.Use();
+                }
+                break;
+            case EventType.MouseUp:
+                if (GUIUtility.hotControl == id)
+                {
+                    GUIUtility.hotControl = 0;
+                    if (dragRackIdx >= 0)
+                    {
+                        if (dragMoved) DropOnBoard(dragRackIdx, e.mousePosition);
+                        else OnRackTap(dragRackIdx); // no movement -> treat as a tap
+                    }
+                    dragRackIdx = -1;
+                    dragMoved = false;
+                    e.Use();
+                }
+                break;
+        }
+    }
+
+    // Rack tile index under a pointer position (virtual-canvas coords), or -1.
+    private int RackIndexAt(Vector2 p)
+    {
+        if (geoRackCount <= 0 || p.y < geoRackTop || p.y > geoRackTop + geoRackSize) return -1;
+        for (int i = 0; i < geoRackCount; i++)
+        {
+            float x = geoRackX0 + i * (geoRackSize + geoRackGap);
+            if (p.x >= x && p.x <= x + geoRackSize) return i;
+        }
+        return -1;
+    }
+
+    // Board square under a pointer position, or false if outside the board.
+    private bool BoardCellAt(Vector2 p, out int r, out int c)
+    {
+        r = -1; c = -1;
+        if (geoCell <= 0f) return false;
+        int cc = (int)((p.x - geoBoardX) / geoCell);
+        int rr = (int)((p.y - geoBoardY) / geoCell);
+        if (p.x < geoBoardX || p.y < geoBoardY || rr < 0 || rr >= 15 || cc < 0 || cc >= 15) return false;
+        r = rr; c = cc; return true;
+    }
+
+    // Drop the dragged rack tile onto the square under the pointer. Off-board or
+    // occupied squares simply cancel the drag (the tile returns to the rack).
+    private void DropOnBoard(int rackIdx, Vector2 p)
+    {
+        int r, c;
+        if (!BoardCellAt(p, out r, out c)) return;
+        if (usedIdx.Contains(rackIdx) || provChar[r, c] != (char)0 || !ActiveBoard().IsEmptyCell(r, c)) return;
+        char ch = ActiveRack()[rackIdx];
+        if (ch == '?')
+        {
+            showBlank = true; blankR = r; blankC = c; blankRackIdx = rackIdx;
+        }
+        else
+        {
+            PlaceTile(r, c, rackIdx, ch, false);
+        }
+    }
+
+    private void DrawDragTile()
+    {
+        if (dragRackIdx < 0 || !dragMoved || Event.current.type != EventType.Repaint) return;
+        List<char> rack = ActiveRack();
+        if (dragRackIdx >= rack.Count) return;
+
+        // Highlight a valid drop target under the pointer.
+        int r, c;
+        if (BoardCellAt(dragPos, out r, out c) && provChar[r, c] == (char)0 && ActiveBoard().IsEmptyCell(r, c))
+        {
+            DrawRect(new Rect(geoBoardX + c * geoCell, geoBoardY + r * geoCell, geoCell, geoCell),
+                new Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.4f));
+        }
+
+        float s = geoRackSize;
+        DrawTile(new Rect(dragPos.x - s / 2f, dragPos.y - s / 2f, s, s), rack[dragRackIdx], false, true, s);
+    }
 
     private void HandleCellTap(int r, int c)
     {
@@ -1195,6 +1334,8 @@ public class ScrabbleApp : MonoBehaviour
         mpPlayHistory.Clear();
         lastCapturedEvent = "";
         historyScroll = Vector2.zero;
+        dragRackIdx = -1;
+        dragMoved = false;
     }
 
     private void BeginGame()
