@@ -99,6 +99,17 @@ namespace Shaderpark.Scrabble
 
         public int Score(Move m)
         {
+            ScoreBreakdown b = Explain(m);
+            m.score = b.Total();
+            return m.score;
+        }
+
+        // Detailed, ordered breakdown of a move's score for the scoring
+        // animation. Mirrors Score() exactly: same words, same letter (DL/TL)
+        // and word (DW/TW) multipliers, same bingo bonus -- Score() is defined
+        // in terms of it, so the two can never diverge.
+        public ScoreBreakdown Explain(Move m)
+        {
             char[][] g = GridCopy();
             bool[][] bl = BlankCopy();
             bool[][] isNew = NewBoolGrid();
@@ -109,66 +120,105 @@ namespace Shaderpark.Scrabble
                 isNew[m.pr[i]][m.pc[i]] = true;
             }
 
-            int total = 0;
+            ScoreBreakdown b = new ScoreBreakdown();
             bool horizontal = m.horizontal;
             bool single = m.pr.Length == 1;
 
             if (single)
             {
-                total += ScoreWord(g, bl, isNew, m.pr[0], m.pc[0], 0, 1);
-                total += ScoreWord(g, bl, isNew, m.pr[0], m.pc[0], 1, 0);
+                b.Add(ExplainWord(g, bl, isNew, m.pr[0], m.pc[0], 0, 1));
+                b.Add(ExplainWord(g, bl, isNew, m.pr[0], m.pc[0], 1, 0));
             }
             else if (horizontal)
             {
-                int r = m.pr[0];
-                total += ScoreWord(g, bl, isNew, r, m.pc[0], 0, 1);
+                b.Add(ExplainWord(g, bl, isNew, m.pr[0], m.pc[0], 0, 1));
                 for (int i = 0; i < m.pr.Length; i++)
-                    total += ScoreWord(g, bl, isNew, m.pr[i], m.pc[i], 1, 0);
+                    b.Add(ExplainWord(g, bl, isNew, m.pr[i], m.pc[i], 1, 0));
             }
             else
             {
-                int c = m.pc[0];
-                total += ScoreWord(g, bl, isNew, m.pr[0], c, 1, 0);
+                b.Add(ExplainWord(g, bl, isNew, m.pr[0], m.pc[0], 1, 0));
                 for (int i = 0; i < m.pr.Length; i++)
-                    total += ScoreWord(g, bl, isNew, m.pr[i], m.pc[i], 0, 1);
+                    b.Add(ExplainWord(g, bl, isNew, m.pr[i], m.pc[i], 0, 1));
             }
 
-            if (m.pr.Length == 7)
-            {
-                total += 50; // bingo
-            }
-            m.score = total;
-            return total;
+            b.bingo = m.pr.Length == 7;
+            return b;
         }
 
-        private int ScoreWord(char[][] g, bool[][] bl, bool[][] isNew, int r, int c, int dr, int dc)
+        private WordScore ExplainWord(char[][] g, bool[][] bl, bool[][] isNew, int r, int c, int dr, int dc)
         {
             int sr = r, sc = c;
             while (InBounds(sr - dr, sc - dc) && g[sr - dr][sc - dc] != (char)0) { sr -= dr; sc -= dc; }
             int er = r, ec = c;
             while (InBounds(er + dr, ec + dc) && g[er + dr][ec + dc] != (char)0) { er += dr; ec += dc; }
             int len = System.Math.Abs(er - sr) + System.Math.Abs(ec - sc) + 1;
-            if (len < 2) return 0;
+            if (len < 2) return null;
 
-            int wordScore = 0;
-            int wordMult = 1;
+            WordScore ws = new WordScore();
             int cr = sr, cc = sc;
             for (int i = 0; i < len; i++)
             {
                 int val = bl[cr][cc] ? 0 : ScrabbleData.Value(g[cr][cc]);
+                int lm = 1;
                 if (isNew[cr][cc])
                 {
                     char p = ScrabbleData.PremiumAt(cr, cc);
-                    if (p == 'd') val *= 2;
-                    else if (p == 't') val *= 3;
-                    else if (p == 'D' || p == '*') wordMult *= 2;
-                    else if (p == 'T') wordMult *= 3;
+                    if (p == 'd') lm = 2;
+                    else if (p == 't') lm = 3;
+                    else if (p == 'D' || p == '*') ws.wordMult *= 2;
+                    else if (p == 'T') ws.wordMult *= 3;
                 }
-                wordScore += val;
+                ws.letters.Add(new LetterScore(cr, cc, val, lm, isNew[cr][cc]));
                 cr += dr;
                 cc += dc;
             }
-            return wordScore * wordMult;
+            return ws;
+        }
+
+        // ---- Score breakdown types (consumed by the scoring animation) ----
+
+        /// <summary>One tile within a scored word.</summary>
+        public sealed class LetterScore
+        {
+            public readonly int r, c;
+            public readonly int baseVal;    // face value, 0 for a blank
+            public readonly int letterMult; // 1/2/3 -- DL/TL on a newly-placed tile
+            public readonly bool isNew;     // placed by this move (vs already on the board)
+            public LetterScore(int r, int c, int baseVal, int letterMult, bool isNew)
+            {
+                this.r = r; this.c = c; this.baseVal = baseVal; this.letterMult = letterMult; this.isNew = isNew;
+            }
+        }
+
+        /// <summary>One word formed by a move (main word or a cross word).</summary>
+        public sealed class WordScore
+        {
+            public readonly List<LetterScore> letters = new List<LetterScore>();
+            public int wordMult = 1; // product of DW/TW multipliers on newly-placed tiles
+
+            public int LetterSum()
+            {
+                int s = 0;
+                for (int i = 0; i < letters.Count; i++) s += letters[i].baseVal * letters[i].letterMult;
+                return s;
+            }
+            public int Subtotal() { return LetterSum() * wordMult; }
+        }
+
+        /// <summary>All words formed by a move, plus the bingo flag.</summary>
+        public sealed class ScoreBreakdown
+        {
+            public readonly List<WordScore> words = new List<WordScore>();
+            public bool bingo;
+            public void Add(WordScore w) { if (w != null) words.Add(w); }
+            public int Total()
+            {
+                int t = 0;
+                for (int i = 0; i < words.Count; i++) t += words[i].Subtotal();
+                if (bingo) t += 50;
+                return t;
+            }
         }
 
         // ------------------------------------------------------------------

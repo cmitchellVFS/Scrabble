@@ -115,6 +115,24 @@ public class ScrabbleApp : MonoBehaviour
     private float animTotal;
     private List<float[]> animTiles;   // {r, c, letterCode, blank?1:0, delay}
 
+    // Scoring reveal (single-player). Purely presentational -- the score is
+    // already committed; these timed popups walk the breakdown: letter values,
+    // then DL/TL letter bonuses, then DW/TW word multipliers, then bingo.
+    private bool scoreAnimActive;
+    private float scoreAnimStart, scoreAnimDur;
+    private System.Action scoreThen;
+    private List<ScorePop> scorePops;
+    private const float PopLife = 0.8f;
+
+    private struct ScorePop
+    {
+        public float t;      // seconds from the reveal start when this pop appears
+        public int r, c;     // board cell; r < 0 means the centred bingo banner
+        public string text;  // "+3", "DL ×2", "WORD ×3", "BINGO +50"
+        public int kind;     // 0 base, 1 letter-mult, 2 word-mult, 3 bingo
+        public int running;  // running move total once this pop has appeared
+    }
+
     private const string SAVE_FILE = "savegame.dat";
 
     // Virtual portrait canvas the whole UI is laid out against. Scaled+letterboxed
@@ -225,6 +243,20 @@ public class ScrabbleApp : MonoBehaviour
         }
 #endif
 
+        // While the scoring reveal plays, freeze the turn machinery so the AI
+        // doesn't start (or the game doesn't end) until the player has seen it.
+        if (scoreAnimActive)
+        {
+            if (Time.time - scoreAnimStart >= scoreAnimDur)
+            {
+                scoreAnimActive = false;
+                System.Action then = scoreThen; scoreThen = null;
+                busy = false;
+                if (then != null) then();
+            }
+            return;
+        }
+
         if (multiplayer) UpdateMultiplayer();
         CaptureHistory();
 
@@ -309,10 +341,83 @@ public class ScrabbleApp : MonoBehaviour
 
     private void CommitAi(Move m)
     {
+        bool scored = m != null && m.type == Move.NORMAL && m.TilesPlaced() > 0;
         game.CommitAiMove(m);
+        SaveGame();
+        if (scored)
+        {
+            Board.ScoreBreakdown bd = game.board.Explain(m);
+            if (bd.Total() > 0) { StartScoreAnim(bd, FinishAiTurn); return; }
+        }
+        FinishAiTurn();
+    }
+
+    private void FinishAiTurn()
+    {
         busy = false;
         if (!game.over && !game.humanTurn) game.humanTurn = true;
-        SaveGame();
+    }
+
+    // Builds the timed popup sequence for a move's score and starts the reveal.
+    // The running total climbs stage by stage and ends exactly on bd.Total().
+    private void StartScoreAnim(Board.ScoreBreakdown bd, System.Action then)
+    {
+        scorePops = new List<ScorePop>();
+        float t = 0.3f;
+        int running = 0;
+        for (int wi = 0; wi < bd.words.Count; wi++)
+        {
+            Board.WordScore w = bd.words[wi];
+            // 1) base letter values, tile by tile
+            for (int i = 0; i < w.letters.Count; i++)
+            {
+                Board.LetterScore l = w.letters[i];
+                if (l.baseVal <= 0) continue;
+                running += l.baseVal;
+                scorePops.Add(NewPop(t, l.r, l.c, "+" + l.baseVal, 0, running));
+                t += 0.16f;
+            }
+            // 2) DL/TL letter bonuses on newly-placed tiles
+            bool anyLetterMult = false;
+            for (int i = 0; i < w.letters.Count; i++)
+            {
+                Board.LetterScore l = w.letters[i];
+                if (!l.isNew || l.letterMult <= 1 || l.baseVal <= 0) continue;
+                if (!anyLetterMult) { t += 0.3f; anyLetterMult = true; }
+                running += l.baseVal * (l.letterMult - 1);
+                scorePops.Add(NewPop(t, l.r, l.c, l.letterMult == 2 ? "DL ×2" : "TL ×3", 1, running));
+                t += 0.24f;
+            }
+            // 3) DW/TW word multiplier
+            if (w.wordMult > 1)
+            {
+                t += 0.34f;
+                running += w.LetterSum() * (w.wordMult - 1);
+                Board.LetterScore mid = w.letters[w.letters.Count / 2];
+                scorePops.Add(NewPop(t, mid.r, mid.c, w.wordMult == 2 ? "WORD ×2" : "WORD ×3", 2, running));
+                t += 0.55f;
+            }
+            t += 0.15f;
+        }
+        if (bd.bingo)
+        {
+            t += 0.4f;
+            running += 50;
+            scorePops.Add(NewPop(t, -1, -1, "BINGO +50", 3, running));
+            t += 0.8f;
+        }
+        scoreAnimDur = t + 0.7f;
+        scoreAnimStart = Time.time;
+        scoreAnimActive = true;
+        scoreThen = then;
+        busy = true;
+    }
+
+    private static ScorePop NewPop(float t, int r, int c, string text, int kind, int running)
+    {
+        ScorePop p;
+        p.t = t; p.r = r; p.c = c; p.text = text; p.kind = kind; p.running = running;
+        return p;
     }
 
     private void StartAiTurn()
@@ -397,6 +502,7 @@ public class ScrabbleApp : MonoBehaviour
 
     private string ActiveTurnLabel()
     {
+        if (scoreAnimActive) return "Scoring…";
         if (ActiveOver()) return "Game over";
         if (!multiplayer) return busy ? "AI thinking…" : "Your turn";
         if (netAwaitingResult) return "Sending…";
@@ -470,7 +576,7 @@ public class ScrabbleApp : MonoBehaviour
         if (showDef) DrawDefinition();
         if (showHistory) DrawHistory();
         bool isGameOver = multiplayer ? (net != null && net.over) : (game != null && game.over);
-        if (screen == ScreenState.Playing && isGameOver) DrawGameOver();
+        if (screen == ScreenState.Playing && isGameOver && !scoreAnimActive) DrawGameOver();
         if (showQuitConfirm) DrawQuitConfirm();
         if (toast.Length > 0) DrawToast();
 
@@ -665,6 +771,7 @@ public class ScrabbleApp : MonoBehaviour
 
         // Floating tile + target highlight, painted on top of everything.
         DrawDragTile();
+        DrawScoreAnim();
     }
 
     private void DrawBoard(float bx, float by, float cell)
@@ -810,6 +917,7 @@ public class ScrabbleApp : MonoBehaviour
         GUI.enabled = !ModalActive; // leaving is always allowed, even mid-turn
         if (GUI.Button(new Rect(x + 2 * (bw3 + U), y2, bw3, bh), "New Game", Btn(fs)))
         {
+            scoreAnimActive = false; scoreThen = null; // cancel any in-flight reveal
             if (multiplayer) LeaveMultiplayer();
             else screen = ScreenState.Start;
         }
@@ -935,6 +1043,68 @@ public class ScrabbleApp : MonoBehaviour
         DrawTile(new Rect(dragPos.x - s / 2f, dragPos.y - s / 2f, s, s), rack[dragRackIdx], false, true, s);
     }
 
+    private void DrawScoreAnim()
+    {
+        if (!scoreAnimActive || scorePops == null || Event.current.type != EventType.Repaint) return;
+        float elapsed = Time.time - scoreAnimStart;
+
+        int shown = 0;
+        for (int i = 0; i < scorePops.Count; i++)
+        {
+            ScorePop p = scorePops[i];
+            if (elapsed < p.t) continue;
+            shown = p.running; // pops are time-ordered, so the last visible one is current
+            float age = elapsed - p.t;
+            if (age > PopLife) continue;
+            float fade = 1f - age / PopLife;
+            float rise = age * 7f * U;
+
+            float px, py; int size;
+            if (p.r >= 0)
+            {
+                px = geoBoardX + p.c * geoCell + geoCell * 0.5f;
+                py = geoBoardY + p.r * geoCell + geoCell * 0.5f - rise;
+                size = (int)((p.kind == 0 ? 3.4f : 2.9f) * U);
+            }
+            else
+            {
+                px = VW * 0.5f;
+                py = geoBoardY + geoCell * 7.5f - rise;
+                size = (int)(5.5f * U);
+            }
+            Color col = PopColor(p.kind); col.a = fade;
+            DrawPop(px, py, p.text, col, size);
+        }
+
+        // Running move total, in a chip centred at the top of the board.
+        if (shown > 0)
+        {
+            float cw = 24 * U, ch = 9 * U;
+            Rect chip = new Rect(VW * 0.5f - cw / 2f, geoBoardY + 0.8f * U, cw, ch);
+            DrawRect(chip, Hex(0xF01B2740));
+            GUI.Label(chip, "+" + shown, Label((int)(5 * U), Hex(0xFFFFD24A), TextAnchor.MiddleCenter, true));
+        }
+    }
+
+    private Color PopColor(int kind)
+    {
+        if (kind == 1) return ACCENT;                 // letter multiplier
+        if (kind == 2) return Hex(0xFFE8A33A);        // word multiplier (orange)
+        if (kind == 3) return Hex(0xFFFFD24A);        // bingo (gold)
+        return TEXT;                                  // base value
+    }
+
+    private void DrawPop(float cx, float cy, string text, Color col, int size)
+    {
+        GUIStyle st = Label(size, col, TextAnchor.MiddleCenter, true);
+        Vector2 sz = st.CalcSize(new GUIContent(text));
+        Rect r = new Rect(cx - sz.x / 2f, cy - sz.y / 2f, sz.x, sz.y);
+        Color shadow = new Color(0f, 0f, 0f, col.a * 0.6f);
+        GUI.Label(new Rect(r.x + 1, r.y + 1, r.width, r.height), text,
+            Label(size, shadow, TextAnchor.MiddleCenter, true));
+        GUI.Label(r, text, st);
+    }
+
     private void HandleCellTap(int r, int c)
     {
         if (exchangeMode || arrangeMode) return;
@@ -1051,8 +1221,12 @@ public class ScrabbleApp : MonoBehaviour
 
         Board.Validation v = game.TrySubmitHuman(m);
         if (!v.ok) { Toast(v.error); return; }
+        // Explain after the submit: TrySubmitHuman has set m.horizontal and the
+        // board now holds the tiles (Explain re-overlays them, so it is exact).
+        Board.ScoreBreakdown bd = game.board.Explain(m);
         RecallAll();
-        EndHumanTurn();
+        if (bd.Total() > 0) StartScoreAnim(bd, EndHumanTurn);
+        else EndHumanTurn();
     }
 
     private void OnShuffle()
@@ -1336,6 +1510,9 @@ public class ScrabbleApp : MonoBehaviour
         historyScroll = Vector2.zero;
         dragRackIdx = -1;
         dragMoved = false;
+        scoreAnimActive = false;
+        scoreThen = null;
+        scorePops = null;
     }
 
     private void BeginGame()
