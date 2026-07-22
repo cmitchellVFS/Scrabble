@@ -46,6 +46,8 @@ namespace Shaderpark.Scrabble
             if (isA) scoreA += v.score; else scoreB += v.score;
             bag.Fill(rack, 7);
             scoreless = 0;
+            // Moves arriving from the UI/network carry no word; recover it.
+            if (m.word.Length == 0 && v.words.Count > 0) m.word = v.words[0];
             lastEvent = (isA ? "A" : "B") + " played " + m.word + " for " + v.score;
             if (rack.Count == 0 && bag.IsEmpty()) FinishByGoingOut(isA);
             else turnA = !isA;

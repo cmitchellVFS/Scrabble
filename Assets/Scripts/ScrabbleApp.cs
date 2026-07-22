@@ -66,6 +66,16 @@ public class ScrabbleApp : MonoBehaviour
     private bool showDef;
     private string defText = "";
 
+    // Played-words log overlay. Single-player history is authoritative in
+    // Game.plays (saved with the game and restored on resume); multiplayer has
+    // no persisted Game, so it is reconstructed from the synced last-event line
+    // into mpPlayHistory. ActivePlayHistory() picks the right one.
+    private bool showHistory;
+    private readonly List<string> mpPlayHistory = new List<string>();
+    private static readonly List<string> emptyHistory = new List<string>();
+    private string lastCapturedEvent = "";
+    private Vector2 historyScroll;
+
     // Quit confirmation (PC only, triggered by Esc).
     private bool showQuitConfirm;
 
@@ -197,11 +207,13 @@ public class ScrabbleApp : MonoBehaviour
         if (Input.GetKeyDown(KeyCode.Escape))
         {
             if (showQuitConfirm) showQuitConfirm = false;
+            else if (showHistory) showHistory = false;
             else if (!showBlank && !showDef) showQuitConfirm = true;
         }
 #endif
 
         if (multiplayer) UpdateMultiplayer();
+        CaptureHistory();
 
         if (aiReady && !animating)
         {
@@ -256,6 +268,18 @@ public class ScrabbleApp : MonoBehaviour
         }
 
         busy = !ActiveMyTurn() || netAwaitingResult;
+    }
+
+    // Single-player history is recorded authoritatively in Game.plays; only the
+    // multiplayer log needs rebuilding from the synced last-event line. Passes
+    // and exchanges never contain "played", so they are skipped.
+    private void CaptureHistory()
+    {
+        if (!multiplayer || screen != ScreenState.Playing || net == null) return;
+        string ev = ActiveLastEvent();
+        if (ev == lastCapturedEvent) return;
+        lastCapturedEvent = ev;
+        if (!string.IsNullOrEmpty(ev) && ev.Contains("played")) mpPlayHistory.Add(ev);
     }
 
     private void BeginAiAnimation(Move m)
@@ -352,6 +376,12 @@ public class ScrabbleApp : MonoBehaviour
         return multiplayer ? net.lastEvent : game.lastEvent;
     }
 
+    private List<string> ActivePlayHistory()
+    {
+        if (multiplayer) return mpPlayHistory;
+        return game != null ? game.plays : emptyHistory;
+    }
+
     private string ActiveTurnLabel()
     {
         if (ActiveOver()) return "Game over";
@@ -425,6 +455,7 @@ public class ScrabbleApp : MonoBehaviour
         }
         if (showBlank) DrawBlankChooser();
         if (showDef) DrawDefinition();
+        if (showHistory) DrawHistory();
         bool isGameOver = multiplayer ? (net != null && net.over) : (game != null && game.over);
         if (screen == ScreenState.Playing && isGameOver) DrawGameOver();
         if (showQuitConfirm) DrawQuitConfirm();
@@ -438,7 +469,7 @@ public class ScrabbleApp : MonoBehaviour
     // True while a modal overlay is up. IMGUI dispatches clicks in draw/call
     // order, not visual z-order, so board/rack/control buttons underneath an
     // overlay must be disabled or they silently eat clicks meant for it.
-    private bool ModalActive { get { return showBlank || showDef || showQuitConfirm; } }
+    private bool ModalActive { get { return showBlank || showDef || showQuitConfirm || showHistory; } }
 
     private GUIStyle Label(int px, Color col, TextAnchor anchor, bool bold)
     {
@@ -584,8 +615,16 @@ public class ScrabbleApp : MonoBehaviour
             "You " + ActiveMyScore() + "   " + (multiplayer ? "Opp " : "AI ") + ActiveOppScore() +
             "   Bag " + ActiveBagSize() + "   " + ActiveTurnLabel(),
             Label((int)(3.6f * U), TEXT, TextAnchor.MiddleLeft, true));
-        GUI.Label(new Rect(2 * U, 6 * U, w - 4 * U, 5 * U), ActiveLastEvent(),
+        // Last scored move -- tap to open the running list of played words.
+        Rect eventRect = new Rect(2 * U, 6 * U, w - 4 * U, 5 * U);
+        bool hasHistory = ActivePlayHistory().Count > 0;
+        GUI.Label(eventRect, hasHistory ? ActiveLastEvent() + "   ›" : ActiveLastEvent(),
             Label((int)(3 * U), ACCENT, TextAnchor.MiddleLeft, false));
+        if (hasHistory && !ModalActive && GUI.Button(eventRect, GUIContent.none, GUIStyle.none))
+        {
+            showHistory = true;
+            historyScroll = Vector2.zero;
+        }
 
         float controlsH = 22 * U;
         float rackH = w / 8f + 2 * U;
@@ -1040,6 +1079,43 @@ public class ScrabbleApp : MonoBehaviour
         }
     }
 
+    private void DrawHistory()
+    {
+        float w = VW;
+        Rect box = new Rect(w * 0.06f, VH * 0.18f, w * 0.88f, VH * 0.64f);
+        DrawRect(box, CARD);
+        GUI.Label(new Rect(box.x, box.y + 2 * U, box.width, 6 * U), "Played words",
+            Label((int)(4 * U), TEXT, TextAnchor.MiddleCenter, true));
+
+        Rect inner = new Rect(box.x + 3 * U, box.y + 9 * U, box.width - 6 * U, box.height - 22 * U);
+        List<string> hist = ActivePlayHistory();
+        if (hist.Count == 0)
+        {
+            GUI.Label(inner, "No words played yet.", Label((int)(3.4f * U), MUTED, TextAnchor.UpperLeft, false));
+        }
+        else
+        {
+            // Most recent play first.
+            StringBuilder sb = new StringBuilder();
+            for (int i = hist.Count - 1; i >= 0; i--)
+            {
+                sb.Append(hist[i]);
+                if (i > 0) sb.Append('\n');
+            }
+            float lineH = 4.6f * U;
+            float contentH = Mathf.Max(inner.height, hist.Count * lineH + 2 * U);
+            historyScroll = GUI.BeginScrollView(inner, historyScroll, new Rect(0, 0, inner.width - 4 * U, contentH));
+            GUI.Label(new Rect(0, 0, inner.width - 4 * U, contentH), sb.ToString(),
+                Label((int)(3.4f * U), TEXT, TextAnchor.UpperLeft, false));
+            GUI.EndScrollView();
+        }
+
+        if (GUI.Button(new Rect(box.x + box.width / 2 - 15 * U, box.y + box.height - 11 * U, 30 * U, 9 * U), "Close", Btn((int)(3.6f * U))))
+        {
+            showHistory = false; historyScroll = Vector2.zero;
+        }
+    }
+
     private void DrawGameOver()
     {
         float w = VW;
@@ -1115,6 +1191,10 @@ public class ScrabbleApp : MonoBehaviour
         busy = false;
         showDef = false;
         showBlank = false;
+        showHistory = false;
+        mpPlayHistory.Clear();
+        lastCapturedEvent = "";
+        historyScroll = Vector2.zero;
     }
 
     private void BeginGame()

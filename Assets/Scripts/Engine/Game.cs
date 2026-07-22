@@ -17,6 +17,9 @@ namespace Shaderpark.Scrabble
         public bool over;
         public int elo;
         public string lastEvent = "";
+        // Ordered log of scoring word plays ("You played CAT for 10", ...), saved
+        // with the game so the played-words list survives a save/resume.
+        public readonly List<string> plays = new List<string>();
 
         private readonly Dict dict;
         private readonly Ai ai;
@@ -45,7 +48,11 @@ namespace Shaderpark.Scrabble
             humanScore += v.score;
             bag.Fill(humanRack, 7);
             scoreless = 0;
+            // A human move arrives without its word filled in (only the AI
+            // generator sets it); recover the main word from the validation.
+            if (m.word.Length == 0 && v.words.Count > 0) m.word = v.words[0];
             lastEvent = "You played " + m.word + " for " + v.score;
+            plays.Add(lastEvent);
             if (humanRack.Count == 0 && bag.IsEmpty()) FinishByGoingOut(true);
             else humanTurn = false;
             return v;
@@ -124,6 +131,7 @@ namespace Shaderpark.Scrabble
                 bag.Fill(aiRack, 7);
                 scoreless = 0;
                 desc = "AI played " + m.word + " for " + m.score;
+                plays.Add(desc);
             }
             lastEvent = desc;
             if (m.type == Move.NORMAL && aiRack.Count == 0 && bag.IsEmpty())
@@ -192,7 +200,7 @@ namespace Shaderpark.Scrabble
                 }
             }
             StringBuilder sb = new StringBuilder();
-            sb.Append("V1\n")
+            sb.Append("V2\n")
                 .Append(elo).Append('\n')
                 .Append(humanScore).Append('\n')
                 .Append(aiScore).Append('\n')
@@ -205,6 +213,9 @@ namespace Shaderpark.Scrabble
                 .Append(RackString(aiRack)).Append('\n')
                 .Append(RackString(bag.Contents())).Append('\n')
                 .Append(lastEvent == null ? "" : lastEvent.Replace('\n', ' '));
+            // V2: one scoring play per line, after the last-event line.
+            for (int i = 0; i < plays.Count; i++)
+                sb.Append('\n').Append(plays[i].Replace('\n', ' '));
             return sb.ToString();
         }
 
@@ -213,7 +224,7 @@ namespace Shaderpark.Scrabble
             try
             {
                 string[] ln = data.Split('\n');
-                if (ln.Length < 12 || ln[0] != "V1") return null;
+                if (ln.Length < 12 || (ln[0] != "V1" && ln[0] != "V2")) return null;
                 int elo = int.Parse(ln[1]);
                 Game g = new Game(dict, elo, System.DateTime.Now.Ticks);
                 g.humanScore = int.Parse(ln[2]);
@@ -240,6 +251,9 @@ namespace Shaderpark.Scrabble
                 FillRack(bagTiles, ln[11]);
                 g.bag.SetContents(bagTiles);
                 g.lastEvent = ln.Length > 12 ? ln[12] : "";
+                // V2 appends the scoring-play log after the last-event line; V1
+                // saves have no extra lines, so this loop is simply a no-op there.
+                for (int i = 13; i < ln.Length; i++) g.plays.Add(ln[i]);
                 return g;
             }
             catch (System.Exception)
