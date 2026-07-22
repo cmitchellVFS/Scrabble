@@ -52,8 +52,6 @@ public class ScrabbleApp : MonoBehaviour
     private int selectedRack = -1;
     private bool exchangeMode;
     private HashSet<int> exchangeSel;
-    private bool arrangeMode;
-    private int arrangePick = -1;
     private bool busy;
     private string toast = "";
     private float toastUntil;
@@ -870,18 +868,16 @@ public class ScrabbleApp : MonoBehaviour
             bool used = usedIdx.Contains(i) || (dragRackIdx == i && dragMoved);
             bool sel = selectedRack == i;
             bool exch = exchangeMode && exchangeSel.Contains(i);
-            bool pick = arrangeMode && arrangePick == i;
 
             if (used) DrawRect(rect, CARD);
-            else if (pick) DrawRect(rect, Hex(0xFF4A8FBF));
             else if (exch) DrawRect(rect, Hex(0xFFE8A33A));
             else if (sel) DrawRect(rect, ACCENT);
             else DrawRect(rect, TILE);
 
             if (!used)
             {
-                Rect inner = (sel || exch || pick) ? new Rect(rect.x + 3, rect.y + 3, rect.width - 6, rect.height - 6) : rect;
-                if (sel || exch || pick) DrawRect(inner, TILE);
+                Rect inner = (sel || exch) ? new Rect(rect.x + 3, rect.y + 3, rect.width - 6, rect.height - 6) : rect;
+                if (sel || exch) DrawRect(inner, TILE);
                 GUI.Label(inner, ch == '?' ? "?" : ch.ToString(),
                     Label((int)(size * 0.5f), TILE_TEXT, TextAnchor.MiddleCenter, true));
                 if (ch != '?')
@@ -899,25 +895,26 @@ public class ScrabbleApp : MonoBehaviour
     private void DrawControls(float y, float w)
     {
         int fs = (int)(3.3f * U);
-        float bw = (w - 5 * U) / 4f;
+        float bw = (w - 4 * U) / 3f;
         float bh = 9 * U;
         float x = 1 * U;
         bool can = !busy && !animating && !ModalActive && !ActiveOver() && ActiveMyTurn();
-        GUI.enabled = can && !exchangeMode && !arrangeMode;
+
+        // Row 1: Submit / Recall / Shuffle. (Rack reordering is now done by
+        // dragging a tile within the rack, so the Arrange button is gone.)
+        GUI.enabled = can && !exchangeMode;
         if (GUI.Button(new Rect(x, y, bw, bh), "Submit", Btn(fs))) OnSubmit();
         if (GUI.Button(new Rect(x + bw + U, y, bw, bh), "Recall", Btn(fs))) RecallAll();
         if (GUI.Button(new Rect(x + 2 * (bw + U), y, bw, bh), "Shuffle", Btn(fs))) OnShuffle();
-        GUI.enabled = can && !exchangeMode;
-        if (GUI.Button(new Rect(x + 3 * (bw + U), y, bw, bh), arrangeMode ? "Done" : "Arrange", Btn(fs))) OnArrange();
 
+        // Row 2: Pass / Exchange / New Game.
         float y2 = y + bh + U;
-        float bw3 = (w - 4 * U) / 3f;
-        GUI.enabled = can && !exchangeMode && !arrangeMode;
-        if (GUI.Button(new Rect(x, y2, bw3, bh), "Pass", Btn(fs))) OnPass();
-        GUI.enabled = can && !arrangeMode;
-        if (GUI.Button(new Rect(x + bw3 + U, y2, bw3, bh), exchangeMode ? "Confirm" : "Exchange", Btn(fs))) OnExchange();
+        GUI.enabled = can && !exchangeMode;
+        if (GUI.Button(new Rect(x, y2, bw, bh), "Pass", Btn(fs))) OnPass();
+        GUI.enabled = can;
+        if (GUI.Button(new Rect(x + bw + U, y2, bw, bh), exchangeMode ? "Confirm" : "Exchange", Btn(fs))) OnExchange();
         GUI.enabled = !ModalActive; // leaving is always allowed, even mid-turn
-        if (GUI.Button(new Rect(x + 2 * (bw3 + U), y2, bw3, bh), "New Game", Btn(fs)))
+        if (GUI.Button(new Rect(x + 2 * (bw + U), y2, bw, bh), "New Game", Btn(fs)))
         {
             scoreAnimActive = false; scoreThen = null; // cancel any in-flight reveal
             if (multiplayer) LeaveMultiplayer();
@@ -930,11 +927,11 @@ public class ScrabbleApp : MonoBehaviour
     // Interaction
     // ------------------------------------------------------------------
 
-    // Drag-to-place: press a rack tile, drag onto a board square, release to
-    // drop. A press-and-release without movement falls through to OnRackTap so
-    // the original tap-to-select gesture still works. Runs before the board and
-    // rack buttons so it can claim (Event.Use) the events it handles, which
-    // stops those buttons from also firing on the same drag.
+    // Drag a rack tile: onto a board square it is placed there; back onto the
+    // rack it is reordered; released without moving it falls through to
+    // OnRackTap (the original tap-to-select). Runs before the board and rack
+    // buttons so it can claim (Event.Use) the events it handles, which stops
+    // those buttons from also firing on the same drag.
     private void HandleTileDrag()
     {
         Event e = Event.current;
@@ -943,7 +940,7 @@ public class ScrabbleApp : MonoBehaviour
         int id = GUIUtility.GetControlID(FocusType.Passive);
         dragControlId = id;
         bool canDrag = !busy && !animating && !ModalActive && !exchangeMode &&
-                       !arrangeMode && !ActiveOver() && ActiveMyTurn();
+                       !ActiveOver() && ActiveMyTurn();
 
         switch (e.GetTypeForControl(id))
         {
@@ -975,8 +972,14 @@ public class ScrabbleApp : MonoBehaviour
                     GUIUtility.hotControl = 0;
                     if (dragRackIdx >= 0)
                     {
-                        if (dragMoved) DropOnBoard(dragRackIdx, e.mousePosition);
-                        else OnRackTap(dragRackIdx); // no movement -> treat as a tap
+                        if (!dragMoved) OnRackTap(dragRackIdx); // no movement -> tap
+                        else
+                        {
+                            int rr, cc;
+                            if (BoardCellAt(e.mousePosition, out rr, out cc)) DropOnBoard(dragRackIdx, e.mousePosition);
+                            else if (InRackBand(e.mousePosition)) RearrangeRack(dragRackIdx, e.mousePosition.x);
+                            // dropped anywhere else: cancel (tile returns to its slot)
+                        }
                     }
                     dragRackIdx = -1;
                     dragMoved = false;
@@ -996,6 +999,58 @@ public class ScrabbleApp : MonoBehaviour
             if (p.x >= x && p.x <= x + geoRackSize) return i;
         }
         return -1;
+    }
+
+    // True when a pointer is within the rack's vertical band (any x, so a tile
+    // dragged out past the far left or right still counts as a rack drop).
+    private bool InRackBand(Vector2 p)
+    {
+        return geoRackCount > 0 &&
+               p.y >= geoRackTop - geoRackSize * 0.6f &&
+               p.y <= geoRackTop + geoRackSize * 1.6f;
+    }
+
+    // Move the dragged rack tile to the slot the pointer was released over:
+    // between the two nearest tiles, or to the front/back at the far ends.
+    // usedIdx / provList are remapped so any already-placed tiles keep pointing
+    // at the right rack letters.
+    private void RearrangeRack(int fromIdx, float dropX)
+    {
+        List<char> rack = ActiveRack();
+        int n = rack.Count;
+        if (fromIdx < 0 || fromIdx >= n) return;
+
+        // Target slot = number of tiles whose centre is left of the drop point.
+        int k = 0;
+        for (int i = 0; i < n; i++)
+        {
+            float centre = geoRackX0 + i * (geoRackSize + geoRackGap) + geoRackSize / 2f;
+            if (dropX > centre) k++;
+        }
+        int insert = (fromIdx < k) ? k - 1 : k;
+        if (insert < 0) insert = 0;
+        if (insert > n - 1) insert = n - 1;
+        if (insert == fromIdx) return; // dropped back where it started
+
+        // New order expressed as old indices, then inverted to old -> new.
+        List<int> order = new List<int>(n);
+        for (int i = 0; i < n; i++) order.Add(i);
+        order.RemoveAt(fromIdx);
+        order.Insert(insert, fromIdx);
+        int[] newPos = new int[n];
+        for (int ni = 0; ni < n; ni++) newPos[order[ni]] = ni;
+
+        List<char> reordered = new List<char>(n);
+        for (int i = 0; i < n; i++) reordered.Add(rack[order[i]]);
+        rack.Clear();
+        rack.AddRange(reordered);
+
+        HashSet<int> remappedUsed = new HashSet<int>();
+        foreach (int u in usedIdx) remappedUsed.Add(newPos[u]);
+        usedIdx = remappedUsed;
+        for (int i = 0; i < provList.Count; i++) provList[i][2] = newPos[provList[i][2]];
+
+        selectedRack = -1;
     }
 
     // Board square under a pointer position, or false if outside the board.
@@ -1109,7 +1164,7 @@ public class ScrabbleApp : MonoBehaviour
 
     private void HandleCellTap(int r, int c)
     {
-        if (exchangeMode || arrangeMode) return;
+        if (exchangeMode) return;
         if (provChar[r, c] == (char)0 && !ActiveBoard().IsEmptyCell(r, c))
         {
             ShowDefinition(r, c);
@@ -1132,22 +1187,6 @@ public class ScrabbleApp : MonoBehaviour
     private void OnRackTap(int idx)
     {
         if (ActiveOver() || !ActiveMyTurn()) return;
-        List<char> rack = ActiveRack();
-        if (arrangeMode)
-        {
-            if (arrangePick < 0) arrangePick = idx;
-            else if (arrangePick == idx) arrangePick = -1;
-            else
-            {
-                char t = rack[arrangePick];
-                rack.RemoveAt(arrangePick);
-                int insert = (arrangePick < idx) ? idx - 1 : idx;
-                if (insert > rack.Count) insert = rack.Count;
-                rack.Insert(insert, t);
-                arrangePick = -1;
-            }
-            return;
-        }
         if (exchangeMode)
         {
             if (exchangeSel.Contains(idx)) exchangeSel.Remove(idx);
@@ -1245,18 +1284,6 @@ public class ScrabbleApp : MonoBehaviour
         selectedRack = -1;
     }
 
-    private void OnArrange()
-    {
-        if (!arrangeMode)
-        {
-            if (provList.Count > 0) { Toast("Recall your tiles before rearranging"); return; }
-            arrangeMode = true; arrangePick = -1; selectedRack = -1;
-            exchangeMode = false; exchangeSel.Clear();
-            Toast("Tap a tile, then tap where to move it");
-        }
-        else { arrangeMode = false; arrangePick = -1; }
-    }
-
     private void OnPass()
     {
         RecallAll();
@@ -1277,7 +1304,6 @@ public class ScrabbleApp : MonoBehaviour
             if (provList.Count > 0) { Toast("Recall your tiles first"); return; }
             if (ActiveBagSize() == 0) { Toast("Bag is empty — cannot exchange"); return; }
             exchangeMode = true; exchangeSel.Clear(); selectedRack = -1;
-            arrangeMode = false; arrangePick = -1;
             Toast("Tap tiles to swap, then press Confirm");
             return;
         }
@@ -1501,8 +1527,6 @@ public class ScrabbleApp : MonoBehaviour
         exchangeSel = new HashSet<int>();
         selectedRack = -1;
         exchangeMode = false;
-        arrangeMode = false;
-        arrangePick = -1;
         busy = false;
         showDef = false;
         showBlank = false;
