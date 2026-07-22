@@ -907,6 +907,7 @@ public class ScrabbleApp : MonoBehaviour
         GUI.enabled = can && !exchangeMode;
         if (GUI.Button(new Rect(x, y, bw, bh), "Submit", Btn(fs))) OnSubmit();
         if (GUI.Button(new Rect(x + bw + U, y, bw, bh), "Recall", Btn(fs))) RecallAll();
+        GUI.enabled = CanReorderRack; // shuffle your rack even when it's not your turn
         if (GUI.Button(new Rect(x + 2 * (bw + U), y, bw, bh), "Shuffle", Btn(fs))) OnShuffle();
 
         // Row 2: Pass / Exchange / New Game.
@@ -929,6 +930,15 @@ public class ScrabbleApp : MonoBehaviour
     // Interaction
     // ------------------------------------------------------------------
 
+    // Reordering your own rack (drag-rearrange, shuffle) is allowed any time,
+    // including on the opponent's turn in multiplayer -- it only changes the
+    // display order of your tiles. Placing tiles on the board still requires it
+    // to be your turn (see canPlace / DropOnBoard).
+    private bool CanReorderRack
+    {
+        get { return !animating && !ModalActive && !scoreAnimActive && !exchangeMode && !ActiveOver(); }
+    }
+
     // Drag a rack tile: onto a board square it is placed there; back onto the
     // rack it is reordered; released without moving it falls through to
     // OnRackTap (the original tap-to-select). Runs before the board and rack
@@ -941,17 +951,17 @@ public class ScrabbleApp : MonoBehaviour
         // id doesn't shift between frames and break an in-progress drag.
         int id = GUIUtility.GetControlID(FocusType.Passive);
         dragControlId = id;
-        bool canDrag = !busy && !animating && !ModalActive && !exchangeMode &&
-                       !ActiveOver() && ActiveMyTurn();
+        bool canReorder = CanReorderRack;
+        bool canPlace = canReorder && !busy && ActiveMyTurn();
 
         switch (e.GetTypeForControl(id))
         {
             case EventType.MouseDown:
-                if (canDrag && e.button == 0)
+                if (e.button == 0)
                 {
                     int hit = RackIndexAt(e.mousePosition);
                     int br, bc;
-                    if (hit >= 0 && !usedIdx.Contains(hit))
+                    if (canReorder && hit >= 0 && !usedIdx.Contains(hit))
                     {
                         dragRackIdx = hit;
                         dragMoved = false;
@@ -959,9 +969,9 @@ public class ScrabbleApp : MonoBehaviour
                         GUIUtility.hotControl = id;
                         e.Use();
                     }
-                    // Only provisional (unsubmitted) tiles can be picked up;
-                    // committed tiles have provChar == 0 and stay put.
-                    else if (BoardCellAt(e.mousePosition, out br, out bc) && provChar[br, bc] != (char)0)
+                    // Only provisional (unsubmitted) tiles can be picked up, and
+                    // only on your turn; committed tiles have provChar == 0.
+                    else if (canPlace && BoardCellAt(e.mousePosition, out br, out bc) && provChar[br, bc] != (char)0)
                     {
                         dragBoardR = br; dragBoardC = bc;
                         dragMoved = false;
@@ -1093,6 +1103,9 @@ public class ScrabbleApp : MonoBehaviour
     // occupied squares simply cancel the drag (the tile returns to the rack).
     private void DropOnBoard(int rackIdx, Vector2 p)
     {
+        // A rack drag can begin off-turn (to reorder); dropping it on a board
+        // square then does nothing, since placing requires it to be your turn.
+        if (busy || animating || ActiveOver() || !ActiveMyTurn()) return;
         int r, c;
         if (!BoardCellAt(p, out r, out c)) return;
         if (usedIdx.Contains(rackIdx) || provChar[r, c] != (char)0 || !ActiveBoard().IsEmptyCell(r, c)) return;
