@@ -79,7 +79,8 @@ public class ScrabbleApp : MonoBehaviour
     // tap-to-select/tap-to-place flow and the new drag flow work together.
     // Board/rack geometry is captured while drawing so the pointer can be
     // hit-tested against squares and tiles from the event handler.
-    private int dragRackIdx = -1;
+    private int dragRackIdx = -1;              // >= 0 while dragging a rack tile
+    private int dragBoardR = -1, dragBoardC = -1; // >= 0 while dragging a provisional board tile
     private bool dragMoved;
     private Vector2 dragPos;
     private int dragControlId;
@@ -782,7 +783,8 @@ public class ScrabbleApp : MonoBehaviour
             {
                 Rect rect = new Rect(bx + c * cell, by + r * cell, cell - 1, cell - 1);
                 char committed = board.LetterAt(r, c);
-                char prov = provChar[r, c];
+                // The provisional tile being dragged is drawn floating instead.
+                char prov = (dragBoardR == r && dragBoardC == c && dragMoved) ? (char)0 : provChar[r, c];
                 if (committed == (char)0 && prov == (char)0)
                 {
                     char p = ScrabbleData.PremiumAt(r, c);
@@ -948,6 +950,7 @@ public class ScrabbleApp : MonoBehaviour
                 if (canDrag && e.button == 0)
                 {
                     int hit = RackIndexAt(e.mousePosition);
+                    int br, bc;
                     if (hit >= 0 && !usedIdx.Contains(hit))
                     {
                         dragRackIdx = hit;
@@ -956,10 +959,20 @@ public class ScrabbleApp : MonoBehaviour
                         GUIUtility.hotControl = id;
                         e.Use();
                     }
+                    // Only provisional (unsubmitted) tiles can be picked up;
+                    // committed tiles have provChar == 0 and stay put.
+                    else if (BoardCellAt(e.mousePosition, out br, out bc) && provChar[br, bc] != (char)0)
+                    {
+                        dragBoardR = br; dragBoardC = bc;
+                        dragMoved = false;
+                        dragPos = e.mousePosition;
+                        GUIUtility.hotControl = id;
+                        e.Use();
+                    }
                 }
                 break;
             case EventType.MouseDrag:
-                if (GUIUtility.hotControl == id && dragRackIdx >= 0)
+                if (GUIUtility.hotControl == id && (dragRackIdx >= 0 || dragBoardR >= 0))
                 {
                     dragPos = e.mousePosition;
                     dragMoved = true;
@@ -981,7 +994,19 @@ public class ScrabbleApp : MonoBehaviour
                             // dropped anywhere else: cancel (tile returns to its slot)
                         }
                     }
+                    else if (dragBoardR >= 0)
+                    {
+                        if (!dragMoved) RecallCell(dragBoardR, dragBoardC); // tap -> recall to rack
+                        else
+                        {
+                            int rr, cc;
+                            if (BoardCellAt(e.mousePosition, out rr, out cc)) MoveProvisional(dragBoardR, dragBoardC, rr, cc);
+                            else if (InRackBand(e.mousePosition)) RecallCell(dragBoardR, dragBoardC);
+                            // dropped anywhere else: cancel (tile stays where it was)
+                        }
+                    }
                     dragRackIdx = -1;
+                    dragBoardR = -1; dragBoardC = -1;
                     dragMoved = false;
                     e.Use();
                 }
@@ -1084,9 +1109,20 @@ public class ScrabbleApp : MonoBehaviour
 
     private void DrawDragTile()
     {
-        if (dragRackIdx < 0 || !dragMoved || Event.current.type != EventType.Repaint) return;
-        List<char> rack = ActiveRack();
-        if (dragRackIdx >= rack.Count) return;
+        if (!dragMoved || Event.current.type != EventType.Repaint) return;
+
+        char ch; bool blank;
+        if (dragRackIdx >= 0)
+        {
+            List<char> rack = ActiveRack();
+            if (dragRackIdx >= rack.Count) return;
+            ch = rack[dragRackIdx]; blank = false;
+        }
+        else if (dragBoardR >= 0)
+        {
+            ch = provChar[dragBoardR, dragBoardC]; blank = provBlank[dragBoardR, dragBoardC];
+        }
+        else return;
 
         // Highlight a valid drop target under the pointer.
         int r, c;
@@ -1097,7 +1133,7 @@ public class ScrabbleApp : MonoBehaviour
         }
 
         float s = geoRackSize;
-        DrawTile(new Rect(dragPos.x - s / 2f, dragPos.y - s / 2f, s, s), rack[dragRackIdx], false, true, s);
+        DrawTile(new Rect(dragPos.x - s / 2f, dragPos.y - s / 2f, s, s), ch, blank, true, s);
     }
 
     private void DrawScoreAnim()
@@ -1215,6 +1251,27 @@ public class ScrabbleApp : MonoBehaviour
         }
         provChar[r, c] = (char)0;
         provBlank[r, c] = false;
+    }
+
+    // Move a provisional tile from one square to another empty square, keeping
+    // its rack origin so it can still be recalled to the right slot.
+    private void MoveProvisional(int fromR, int fromC, int toR, int toC)
+    {
+        if (fromR == toR && fromC == toC) return;
+        if (provChar[toR, toC] != (char)0 || !ActiveBoard().IsEmptyCell(toR, toC)) return; // target occupied
+        for (int i = 0; i < provList.Count; i++)
+        {
+            int[] p = provList[i];
+            if (p[0] == fromR && p[1] == fromC)
+            {
+                provChar[toR, toC] = provChar[fromR, fromC];
+                provBlank[toR, toC] = provBlank[fromR, fromC];
+                provChar[fromR, fromC] = (char)0;
+                provBlank[fromR, fromC] = false;
+                p[0] = toR; p[1] = toC;
+                return;
+            }
+        }
     }
 
     private void RecallAll()
@@ -1535,6 +1592,7 @@ public class ScrabbleApp : MonoBehaviour
         lastCapturedEvent = "";
         historyScroll = Vector2.zero;
         dragRackIdx = -1;
+        dragBoardR = -1; dragBoardC = -1;
         dragMoved = false;
         scoreAnimActive = false;
         scoreThen = null;
