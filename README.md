@@ -3,8 +3,7 @@
 A single-player Scrabble game (you vs. an ELO-scaled AI) for **Unity 6.5
 (6000.5.3f1)**. This is a straight port of the previously-built Android game's
 engine to C#, with a self-contained IMGUI front-end. **Coherence networking is
-not included yet** — this is the single-player base that the multiplayer layer
-will sit on top of later.
+now included ** 
 
 ## What's in here
 
