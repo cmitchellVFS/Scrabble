@@ -83,7 +83,14 @@ public class ScrabbleApp : MonoBehaviour
     private int dragBoardR = -1, dragBoardC = -1; // >= 0 while dragging a provisional board tile
     private bool dragMoved;
     private Vector2 dragPos;
+    private Vector2 dragStart;                  // pointer-down anchor, for the touch drag threshold
     private int dragControlId;
+    // Touch fingers jitter a few pixels during a tap, which would otherwise flip
+    // a tap into a (usually cancelled) drag. Require this much travel from the
+    // press point, in virtual-canvas units (~standard touch slop at 1080 wide),
+    // before a press is treated as a drag. Mice don't move on a click, so this
+    // is invisible to mouse input.
+    private const float DragThreshold = 24f;
     private float geoBoardX, geoBoardY, geoCell;
     private float geoRackX0, geoRackTop, geoRackSize, geoRackGap;
     private int geoRackCount;
@@ -966,6 +973,7 @@ public class ScrabbleApp : MonoBehaviour
                         dragRackIdx = hit;
                         dragMoved = false;
                         dragPos = e.mousePosition;
+                        dragStart = e.mousePosition;
                         GUIUtility.hotControl = id;
                         e.Use();
                     }
@@ -976,6 +984,7 @@ public class ScrabbleApp : MonoBehaviour
                         dragBoardR = br; dragBoardC = bc;
                         dragMoved = false;
                         dragPos = e.mousePosition;
+                        dragStart = e.mousePosition;
                         GUIUtility.hotControl = id;
                         e.Use();
                     }
@@ -985,7 +994,10 @@ public class ScrabbleApp : MonoBehaviour
                 if (GUIUtility.hotControl == id && (dragRackIdx >= 0 || dragBoardR >= 0))
                 {
                     dragPos = e.mousePosition;
-                    dragMoved = true;
+                    // Only promote to a real drag once the finger has travelled past
+                    // the touch-slop threshold; below it the press still reads as a tap.
+                    if (!dragMoved && (e.mousePosition - dragStart).sqrMagnitude >= DragThreshold * DragThreshold)
+                        dragMoved = true;
                     e.Use();
                 }
                 break;

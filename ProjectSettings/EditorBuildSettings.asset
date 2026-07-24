@@ -4,7 +4,10 @@
 EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
-  m_Scenes: []
+  m_Scenes:
+  - enabled: 1
+    path: Assets/Scrabble.unity
+    guid: 1ae55f1ce33178e44a26aa7a030e7f03
   m_configObjects:
     com.unity.dt.app-ui: {fileID: 11400000, guid: 1b1c20d82303e4b5781c3ef50ac1449f, type: 2}
     io.coherence.simulator.build.options: {fileID: 11400000, guid: f5ea54070cd26a840b871b80aae66f9c, type: 2}
