@@ -80,9 +80,8 @@ namespace Shaderpark.Scrabble
                 PlayerAccount account = await PlayerAccount.GetMainAsync();
 
                 StatusText = "Finding region...";
-                System.Collections.Generic.IReadOnlyList<string> regions =
-                    await account.Services.Rooms.RefreshRegionsAsync();
-                if (regions.Count == 0)
+                Region[] regions = await account.Services.Regions.FetchRegionsAsync();
+                if (regions.Length == 0)
                 {
                     ErrorText = "No Coherence regions available.";
                     return;
@@ -147,7 +146,7 @@ namespace Shaderpark.Scrabble
                     deadline = Time.unscaledTime + 15f;
                     while (Match == null && Time.unscaledTime < deadline)
                     {
-                        Match = FindObjectOfType<ScrabbleNetworkMatch>();
+                        Match = FindAnyObjectByType<ScrabbleNetworkMatch>();
                         if (Match == null) await Task.Yield();
                     }
                     if (Match == null)

@@ -16,7 +16,7 @@ public class ScrabbleApp : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Boot()
     {
-        if (FindObjectOfType<ScrabbleApp>() != null) return;
+        if (FindAnyObjectByType<ScrabbleApp>() != null) return;
         GameObject go = new GameObject("ScrabbleApp");
         go.AddComponent<ScrabbleApp>();
         DontDestroyOnLoad(go);
