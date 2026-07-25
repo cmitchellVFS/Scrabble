@@ -147,9 +147,16 @@ public class ScrabbleApp : MonoBehaviour
     private const float VW = 1080f;
     private const float VH = 2340f;
 
+    // Adaptive frame rate. This is a static IMGUI board game, so rendering the
+    // whole screen at 60fps while nothing moves is the main battery drain.
+    private const int FpsInteractive = 60;    // animations, dragging, active touch
+    private const int FpsMultiplayerIdle = 30; // opponent's turn: keep sync responsive
+    private const int FpsIdle = 15;            // single-player, nothing happening
+    private bool appPaused;
+
     private void Awake()
     {
-        Application.targetFrameRate = 60;
+        Application.targetFrameRate = FpsInteractive;
         Screen.orientation = ScreenOrientation.Portrait;
         Camera cam = gameObject.AddComponent<Camera>();
         cam.clearFlags = CameraClearFlags.SolidColor;
@@ -160,6 +167,30 @@ public class ScrabbleApp : MonoBehaviour
     private void Start()
     {
         StartCoroutine(LoadAssets());
+    }
+
+    // Pick a frame rate from the current state: full speed while something is
+    // moving or the finger is down, a modest floor while networked (so incoming
+    // sync isn't sluggish), and low when idle. Input events still force IMGUI
+    // repaints regardless, so taps stay responsive even at the idle rate.
+    private void ApplyFrameRate()
+    {
+        int fps;
+        if (appPaused)
+        {
+            fps = 1;
+        }
+        else
+        {
+            bool touching = Input.touchCount > 0 || Input.GetMouseButton(0);
+            bool interactive = touching || animating || scoreAnimActive || dragMoved
+                || toast.Length > 0 || screen != ScreenState.Playing
+                || (netSession != null && netSession.IsConnecting);
+            if (interactive) fps = FpsInteractive;
+            else if (multiplayer) fps = FpsMultiplayerIdle;
+            else fps = FpsIdle;
+        }
+        if (Application.targetFrameRate != fps) Application.targetFrameRate = fps;
     }
 
     // ------------------------------------------------------------------
@@ -239,6 +270,7 @@ public class ScrabbleApp : MonoBehaviour
     private void Update()
     {
         if (toast.Length > 0 && Time.unscaledTime > toastUntil) toast = "";
+        ApplyFrameRate(); // before any early return below, so it always runs
 
 #if UNITY_STANDALONE || UNITY_EDITOR
         if (Input.GetKeyDown(KeyCode.Escape))
@@ -596,21 +628,58 @@ public class ScrabbleApp : MonoBehaviour
     // overlay must be disabled or they silently eat clicks meant for it.
     private bool ModalActive { get { return showBlank || showDef || showQuitConfirm || showHistory; } }
 
+    // GUIStyles are cached and reused across frames. Creating them per call (as
+    // this used to) allocated hundreds of styles every OnGUI pass -- constant GC
+    // that keeps the CPU (and battery) busy. Callers must not mutate the result.
+    private readonly Dictionary<StyleKey, GUIStyle> styleCache = new Dictionary<StyleKey, GUIStyle>();
+
+    private struct StyleKey : System.IEquatable<StyleKey>
+    {
+        public readonly int px; public readonly uint rgba;
+        public readonly TextAnchor anchor; public readonly bool bold; public readonly bool button;
+        public StyleKey(int px, uint rgba, TextAnchor anchor, bool bold, bool button)
+        { this.px = px; this.rgba = rgba; this.anchor = anchor; this.bold = bold; this.button = button; }
+        public bool Equals(StyleKey o) => px == o.px && rgba == o.rgba && anchor == o.anchor && bold == o.bold && button == o.button;
+        public override bool Equals(object o) => o is StyleKey k && Equals(k);
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int h = px;
+                h = h * 397 ^ (int)rgba;
+                h = h * 397 ^ (int)anchor;
+                h = h * 397 ^ (bold ? 1 : 0);
+                h = h * 397 ^ (button ? 1 : 0);
+                return h;
+            }
+        }
+    }
+
     private GUIStyle Label(int px, Color col, TextAnchor anchor, bool bold)
     {
-        GUIStyle s = new GUIStyle(GUI.skin.label);
+        Color32 c = col;
+        uint rgba = (uint)((c.r << 24) | (c.g << 16) | (c.b << 8) | c.a);
+        StyleKey key = new StyleKey(px, rgba, anchor, bold, false);
+        GUIStyle s;
+        if (styleCache.TryGetValue(key, out s)) return s;
+        s = new GUIStyle(GUI.skin.label);
         s.fontSize = px;
         s.normal.textColor = col;
         s.alignment = anchor;
         s.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
         s.wordWrap = true;
+        styleCache[key] = s;
         return s;
     }
 
     private GUIStyle Btn(int px)
     {
-        GUIStyle s = new GUIStyle(GUI.skin.button);
+        StyleKey key = new StyleKey(px, 0u, TextAnchor.MiddleCenter, false, true);
+        GUIStyle s;
+        if (styleCache.TryGetValue(key, out s)) return s;
+        s = new GUIStyle(GUI.skin.button);
         s.fontSize = px;
+        styleCache[key] = s;
         return s;
     }
 
@@ -1674,7 +1743,13 @@ public class ScrabbleApp : MonoBehaviour
 
     private void OnApplicationPause(bool paused)
     {
-        if (paused) SaveGame();
+        appPaused = paused;
+        if (paused)
+        {
+            Application.targetFrameRate = 1; // stop render work while backgrounded
+            SaveGame();
+        }
+        // On resume, the next ApplyFrameRate restores the appropriate rate.
     }
 
     private void OnApplicationQuit()
