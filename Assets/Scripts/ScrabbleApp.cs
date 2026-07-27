@@ -810,12 +810,26 @@ public class ScrabbleApp : MonoBehaviour
 
         float w = VW;
         float headerH = 11 * U;
-        GUI.Label(new Rect(2 * U, 0, w - 4 * U, 6 * U),
+        float controlsH = 22 * U;
+        float rackH = w / 8f + 2 * U;
+        float boardMax = VH - headerH - controlsH - rackH - 3 * U;
+        float boardSize = Mathf.Min(w - 2 * U, boardMax);
+        float cell = boardSize / 15f;
+        float bx = (w - boardSize) / 2f;
+
+        // Vertically center the whole play layout. On tall phones the board is
+        // width-constrained (boardSize < boardMax), so without this the leftover
+        // height pools at the bottom and the game rides at the top of the screen.
+        // When the content fills the canvas, vOff is 0 and nothing moves.
+        float contentH = headerH + boardSize + 1.5f * U + rackH + controlsH;
+        float vOff = Mathf.Max(0f, (VH - contentH) / 2f);
+
+        GUI.Label(new Rect(2 * U, vOff, w - 4 * U, 6 * U),
             "You " + ActiveMyScore() + "   " + (multiplayer ? "Opp " : "AI ") + ActiveOppScore() +
             "   Bag " + ActiveBagSize() + "   " + ActiveTurnLabel(),
             Label((int)(3.6f * U), TEXT, TextAnchor.MiddleLeft, true));
         // Last scored move -- tap to open the running list of played words.
-        Rect eventRect = new Rect(2 * U, 6 * U, w - 4 * U, 5 * U);
+        Rect eventRect = new Rect(2 * U, vOff + 6 * U, w - 4 * U, 5 * U);
         bool hasHistory = ActivePlayHistory().Count > 0;
         GUI.Label(eventRect, hasHistory ? ActiveLastEvent() + "   ›" : ActiveLastEvent(),
             Label((int)(3 * U), ACCENT, TextAnchor.MiddleLeft, false));
@@ -825,13 +839,7 @@ public class ScrabbleApp : MonoBehaviour
             historyScroll = Vector2.zero;
         }
 
-        float controlsH = 22 * U;
-        float rackH = w / 8f + 2 * U;
-        float boardMax = VH - headerH - controlsH - rackH - 3 * U;
-        float boardSize = Mathf.Min(w - 2 * U, boardMax);
-        float cell = boardSize / 15f;
-        float bx = (w - boardSize) / 2f;
-        float by = headerH;
+        float by = headerH + vOff;
         geoBoardX = bx; geoBoardY = by; geoCell = cell;
 
         DrawBoard(bx, by, cell);
