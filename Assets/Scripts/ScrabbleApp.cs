@@ -153,7 +153,8 @@ public class ScrabbleApp : MonoBehaviour
         public float startT;   // reveal-time this word begins scoring
         public int subtotal;   // this word's point contribution
         public string word;    // the word text, for the on-board label
-        public int midR, midC; // anchor cell for the label
+        public int topR, botR; // top/bottom rows spanned (for label placement)
+        public int midC;       // centre column, for horizontal label centring
     }
 
     private const string SAVE_FILE = "savegame.dat";
@@ -434,10 +435,13 @@ public class ScrabbleApp : MonoBehaviour
             // Collect this word's cells (for the board focus mask) and its text
             // (for the on-board "WORD +N" label that calls out cross-words).
             System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            int topR = 14, botR = 0;
             for (int i = 0; i < w.letters.Count; i++)
             {
                 Board.LetterScore l = w.letters[i];
                 if (l.r >= 0 && l.r < 15 && l.c >= 0 && l.c < 15) scoreAnimMask[l.r, l.c] = true;
+                if (l.r < topR) topR = l.r;
+                if (l.r > botR) botR = l.r;
                 char wch = ActiveBoard().LetterAt(l.r, l.c);
                 if (wch != (char)0) sb.Append(wch);
             }
@@ -475,7 +479,7 @@ public class ScrabbleApp : MonoBehaviour
             rw.startT = wStart;
             rw.subtotal = w.Subtotal();
             rw.word = sb.ToString();
-            rw.midR = ml.r; rw.midC = ml.c;
+            rw.topR = topR; rw.botR = botR; rw.midC = ml.c;
             revealWords.Add(rw);
             t += 0.15f;
         }
@@ -1370,7 +1374,13 @@ public class ScrabbleApp : MonoBehaviour
                 float fade = age < 1.1f ? 1f : Mathf.Max(0f, 1f - (age - 1.1f) / 0.6f);
                 if (fade <= 0f) continue;
                 float px = geoBoardX + rw.midC * geoCell + geoCell * 0.5f;
-                float py = geoBoardY + rw.midR * geoCell - 2.4f * U;
+                // Sit just above the word's top cell (works for horizontal and
+                // vertical words); if the word reaches the top edge, drop the
+                // label below its bottom cell so it never overlaps tiles or the
+                // header.
+                float py = rw.topR <= 0
+                    ? geoBoardY + (rw.botR + 1) * geoCell + 1.5f * U
+                    : geoBoardY + rw.topR * geoCell - 1.9f * U;
                 Color col = Hex(0xFFCFE0FA); col.a = fade;
                 DrawPop(px, py, rw.word + " +" + rw.subtotal, col, (int)(2.6f * U));
             }
