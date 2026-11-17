@@ -275,7 +275,8 @@ public class ScrabbleApp : MonoBehaviour
             if (t > 0)
             {
                 string key = line.Substring(0, t);
-                if (!d.ContainsKey(key)) d[key] = line.Substring(t + 1);
+                // TrimEnd: tolerate CRLF line endings (git autocrlf on Windows).
+                if (!d.ContainsKey(key)) d[key] = line.Substring(t + 1).TrimEnd('\r');
             }
         }
         return d;
@@ -687,8 +688,7 @@ public class ScrabbleApp : MonoBehaviour
         if (showBlank) DrawBlankChooser();
         if (showDef) DrawDefinition();
         if (showHistory) DrawHistory();
-        bool isGameOver = multiplayer ? (net != null && net.over) : (game != null && game.over);
-        if (screen == ScreenState.Playing && isGameOver && !scoreAnimActive) DrawGameOver();
+        if (GameOverPanelUp) DrawGameOver();
         if (showQuitConfirm) DrawQuitConfirm();
         if (toast.Length > 0) DrawToast();
 
@@ -700,7 +700,20 @@ public class ScrabbleApp : MonoBehaviour
     // True while a modal overlay is up. IMGUI dispatches clicks in draw/call
     // order, not visual z-order, so board/rack/control buttons underneath an
     // overlay must be disabled or they silently eat clicks meant for it.
-    private bool ModalActive { get { return showBlank || showDef || showQuitConfirm || showHistory; } }
+    // The game-over panel counts too: it's drawn after the board, so without
+    // this the invisible board-cell buttons under its "New Game" button take
+    // the click first and pop up a word definition instead of starting a game.
+    private bool ModalActive { get { return showBlank || showDef || showQuitConfirm || showHistory || GameOverPanelUp; } }
+
+    // True while the end-of-game result panel is on screen.
+    private bool GameOverPanelUp
+    {
+        get
+        {
+            if (screen != ScreenState.Playing || scoreAnimActive) return false;
+            return multiplayer ? (net != null && net.over) : (game != null && game.over);
+        }
+    }
 
     // GUIStyles are cached and reused across frames. Creating them per call (as
     // this used to) allocated hundreds of styles every OnGUI pass -- constant GC
@@ -1666,15 +1679,41 @@ public class ScrabbleApp : MonoBehaviour
 
     private string LookupDef(string w)
     {
-        string d;
-        if (defs.TryGetValue(w, out d)) return d;
+        string d = ResolveDef(w);
+        if (d != null) return d;
+        // Fallback for anything defs.tsv doesn't cover directly.
         List<string> bases = Stemmer.Bases(w);
         for (int i = 0; i < bases.Count; i++)
         {
-            if (defs.TryGetValue(bases[i], out d))
-                return d + "\n(inflected form of " + bases[i] + ")";
+            d = ResolveDef(bases[i]);
+            if (d != null)
+                return d + "\n(inflected form of " + bases[i].ToLowerInvariant() + ")";
         }
         return null;
+    }
+
+    // defs.tsv values are either definition text or a pointer to another entry,
+    // written ">BASE|note" (e.g. ARVOS -> ">ARVO|plural of"). Pointers can chain
+    // (CANTONISING -> CANTONIZING -> CANTONIZE); each hop's note is listed under
+    // the final definition. Returns null if the word or its chain is missing.
+    private string ResolveDef(string w)
+    {
+        string d;
+        if (!defs.TryGetValue(w, out d)) return null;
+        if (d.Length == 0 || d[0] != '>') return d;
+
+        List<string> hops = new List<string>();
+        for (int depth = 0; depth < 8; depth++)
+        {
+            int bar = d.IndexOf('|');
+            string target = bar > 1 ? d.Substring(1, bar - 1) : d.Substring(1);
+            string note = bar > 1 ? d.Substring(bar + 1) : "form of";
+            hops.Add(note + " " + target.ToLowerInvariant());
+            if (!defs.TryGetValue(target, out d)) return null;
+            if (d.Length == 0 || d[0] != '>')
+                return d + "\n(" + string.Join("; ", hops.ToArray()) + ")";
+        }
+        return null; // chain too long (shouldn't happen; max depth in data is 4)
     }
 
     // ------------------------------------------------------------------
@@ -1771,6 +1810,10 @@ public class ScrabbleApp : MonoBehaviour
             Label((int)(4 * U), TEXT, TextAnchor.MiddleCenter, false));
         if (GUI.Button(new Rect(box.x + box.width / 2 - 18 * U, box.y + box.height - 11 * U, 36 * U, 9 * U), "New Game", Btn((int)(3.8f * U))))
         {
+            // Don't carry a definition/history overlay opened before the game
+            // ended over onto the start screen.
+            showDef = false; defScroll = Vector2.zero;
+            showHistory = false; historyScroll = Vector2.zero;
             if (multiplayer) LeaveMultiplayer();
             else { DeleteSave(); screen = ScreenState.Start; }
         }

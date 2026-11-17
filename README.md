@@ -18,7 +18,11 @@ Assets/
     ScrabbleApp.cs     IMGUI UI + flow + AI threading + save/resume
   StreamingAssets/
     words.txt          267,751-word Collins/SOWPODS list (2–15 letters)
-    defs.tsv           ~58,600 offline definitions (wordset, MIT)
+    defs.tsv           Offline definitions for ~95% of playable words: wordset (MIT),
+                       Wiktionary (CC BY-SA 4.0), Open English WordNet (CC BY 4.0),
+                       Webster's 1913 (public domain), UWU (MIT). Inflections are
+                       stored as ">BASE|note" pointers that ScrabbleApp follows.
+    DEFINITIONS_CREDITS.txt  Full sources/licences for defs.tsv
 Packages/manifest.json
 ProjectSettings/ProjectVersion.txt
 ```

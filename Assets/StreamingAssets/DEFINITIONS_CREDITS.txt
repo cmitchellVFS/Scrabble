@@ -1,0 +1,30 @@
+Sources for defs.tsv (offline word definitions)
+================================================
+
+defs.tsv combines several open dictionaries. Each playable word either has its own
+definition, or a pointer line ">BASE|note" that the game follows to the base word
+(e.g. ARVOS -> ">ARVO|plural of"). About 95% of the 267,751 playable words resolve to a
+definition; the rest (mostly obscure Spenserian, Scots and technical Collins words)
+show "no definition available offline".
+
+1. wordset-dictionary (MIT) - https://github.com/wordset/wordset-dictionary
+   The original definitions; kept unchanged wherever they existed.
+
+2. Wiktionary (CC BY-SA 4.0 / GFDL) - https://en.wiktionary.org
+   Definitions by Wiktionary contributors, via two machine-readable extracts:
+     - kaikki.org / wiktextract (https://kaikki.org), as bundled in the npm package
+       @hemingweb/wordnook-mcp (CC BY-SA 4.0)
+     - mhollingshead/open-dictionary - https://github.com/mhollingshead/open-dictionary
+   Wiktionary-derived text in defs.tsv is shortened (up to 3 senses, ~300 characters)
+   and is shared under CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/
+
+3. Open English WordNet 2024 (CC BY 4.0) - https://github.com/globalwordnet/english-wordnet
+
+4. Webster's Revised Unabridged Dictionary, 1913 (public domain), from Project Gutenberg,
+   via https://github.com/matthewreagan/WebstersEnglishDictionary
+
+5. Ultimate Words Unleashed (MIT) - https://github.com/bluebear94/uwu
+   Word-game definitions and inflection links.
+
+Inflection, spelling-variant (-ise/-ize etc.), prefix/suffix and compound pointers were
+generated automatically from the word list and the sources above.
