@@ -107,6 +107,12 @@ public class ScrabbleApp : MonoBehaviour
     private readonly Board netGuestBoard = new Board();
     private bool netAwaitingResult;
     private int netLastErrorSeq;
+    // Connection-lost state: latched once the room/match/opponent is gone, so
+    // the game shows a clear message instead of drawing against a dead match.
+    private bool netLost;
+    private string netLostReason = "";
+    private float netTroubleSince = -1f;
+    private const float NetLostGrace = 2f; // ride out brief hiccups before declaring it lost
 
     // Background load.
     private volatile bool loadDone;
@@ -218,10 +224,13 @@ public class ScrabbleApp : MonoBehaviour
     private IEnumerator LoadAssets()
     {
         loadStatus = "Loading word list…";
-        string wordsText = null, defsText = null;
+        string wordsText = null, defsText = null, freqText = null;
         yield return DownloadText("words.txt", (s) => wordsText = s);
         loadStatus = "Loading definitions…";
         yield return DownloadText("defs.tsv", (s) => defsText = s);
+        // Word commonness, used to limit a low-ELO AI to words a beginner knows.
+        // Optional: if missing, the AI simply isn't vocabulary-limited.
+        yield return DownloadText("wordfreq.tsv", (s) => freqText = s);
 
         if (wordsText == null)
         {
@@ -231,11 +240,12 @@ public class ScrabbleApp : MonoBehaviour
 
         loadStatus = "Building dictionary…";
         loadDone = false;
-        string wt = wordsText, dt = defsText;
+        string wt = wordsText, dt = defsText, ft = freqText;
         System.Threading.Thread t = new System.Threading.Thread(() =>
         {
             loadedDict = Dict.Build(wt.Split('\n'));
             loadedDefs = ParseDefs(dt);
+            if (ft != null) Ai.WordFreq = Ai.ParseWordFreq(ft);
             loadDone = true; // volatile write publishes the two fields above
         });
         t.IsBackground = true;
@@ -290,6 +300,7 @@ public class ScrabbleApp : MonoBehaviour
     {
         if (toast.Length > 0 && Time.unscaledTime > toastUntil) toast = "";
         ApplyFrameRate(); // before any early return below, so it always runs
+        ApplySleepTimeout();
 
 #if UNITY_STANDALONE || UNITY_EDITOR
         if (Input.GetKeyDown(KeyCode.Escape))
@@ -341,10 +352,11 @@ public class ScrabbleApp : MonoBehaviour
 
     private void UpdateMultiplayer()
     {
+        CheckNetLost();
         if (net == null && netSession != null) net = netSession.Match;
         if (net == null) return;
 
-        if (net.IsHost && !net.matchStarted && net.GuestConnected)
+        if (NetIsHost && !net.matchStarted && net.GuestConnected)
         {
             net.HostStartMatch(dict, System.DateTime.Now.Ticks);
         }
@@ -352,6 +364,7 @@ public class ScrabbleApp : MonoBehaviour
         if (net.matchStarted && screen == ScreenState.MpLobby)
         {
             InitUiState();
+            ResetNetLost();
             screen = ScreenState.Playing;
         }
 
@@ -560,10 +573,63 @@ public class ScrabbleApp : MonoBehaviour
     // Draw/handler code works for both single-player and multiplayer.
     // ------------------------------------------------------------------
 
+    // Host/guest role, fixed when the room was created or joined. (Coherence's
+    // HasStateAuthority flips to true on a guest once the host disconnects,
+    // which made the guest try to draw the host-only game and crash.)
+    private bool NetIsHost { get { return netSession != null && netSession.IsHost; } }
+    private static readonly List<char> emptyRack = new List<char>();
+
+    // Why the online game can't continue, or null if everything is fine.
+    private string NetProblem()
+    {
+        if (netSession == null || !netSession.IsConnected)
+            return "You lost your connection to the game server.";
+        if (net == null || !net.IsSynchronized) // net == null also catches a destroyed match object
+            return NetIsHost
+                ? "The online match was lost."
+                : "Your opponent (the host) disconnected. Their phone may have gone to sleep or closed the game.";
+        if (NetIsHost && net.GuestLeft)
+            return "Your opponent disconnected. Their phone may have gone to sleep or closed the game.";
+        return null;
+    }
+
+    private void CheckNetLost()
+    {
+        if (netLost || screen != ScreenState.Playing) return;
+        if (!ReferenceEquals(net, null) && net.over) return; // finished games just show the result
+        string problem = NetProblem();
+        if (problem == null) { netTroubleSince = -1f; return; }
+        if (netTroubleSince < 0f) { netTroubleSince = Time.unscaledTime; return; }
+        if (Time.unscaledTime - netTroubleSince < NetLostGrace) return;
+        netLost = true;
+        netLostReason = problem;
+        netAwaitingResult = false;
+        busy = true;
+        showDef = false; showHistory = false; showBlank = false;
+    }
+
+    private void ResetNetLost()
+    {
+        netLost = false;
+        netLostReason = "";
+        netTroubleSince = -1f;
+    }
+
+    // Keep the screen on only while an online match is actually in progress, so
+    // the phone doesn't auto-sleep mid-game and drop the connection. Everything
+    // else (menus, single-player, finished games) uses the phone's own setting.
+    private void ApplySleepTimeout()
+    {
+        bool liveOnline = multiplayer && screen == ScreenState.Playing && !netLost &&
+                          !(!ReferenceEquals(net, null) && net.over);
+        int want = liveOnline ? SleepTimeout.NeverSleep : SleepTimeout.SystemSetting;
+        if (Screen.sleepTimeout != want) Screen.sleepTimeout = want;
+    }
+
     private Board ActiveBoard()
     {
         if (!multiplayer) return game.board;
-        if (net.IsHost) return net.HostGame.board;
+        if (NetIsHost && net.HostGame != null) return net.HostGame.board;
         ScrabbleNetworkMatch.UnpackBoard(net.packedLetters, net.packedBlanks, netGuestBoard);
         return netGuestBoard;
     }
@@ -571,13 +637,14 @@ public class ScrabbleApp : MonoBehaviour
     private List<char> ActiveRack()
     {
         if (!multiplayer) return game.humanRack;
-        return net.IsHost ? net.HostGame.RackOf(true) : net.myRack;
+        if (NetIsHost) return net.HostGame != null ? net.HostGame.RackOf(true) : emptyRack;
+        return net.myRack;
     }
 
     private bool ActiveMyTurn()
     {
         if (!multiplayer) return game.humanTurn;
-        return net.IsHost ? net.turnA : !net.turnA;
+        return NetIsHost ? net.turnA : !net.turnA;
     }
 
     private bool ActiveOver()
@@ -588,13 +655,13 @@ public class ScrabbleApp : MonoBehaviour
     private int ActiveMyScore()
     {
         if (!multiplayer) return game.humanScore;
-        return net.IsHost ? net.scoreA : net.scoreB;
+        return NetIsHost ? net.scoreA : net.scoreB;
     }
 
     private int ActiveOppScore()
     {
         if (!multiplayer) return game.aiScore;
-        return net.IsHost ? net.scoreB : net.scoreA;
+        return NetIsHost ? net.scoreB : net.scoreA;
     }
 
     private int ActiveBagSize()
@@ -658,6 +725,8 @@ public class ScrabbleApp : MonoBehaviour
         multiplayer = false;
         netAwaitingResult = false;
         netLastErrorSeq = 0;
+        ResetNetLost();
+        busy = false;
         roomCodeInput = "";
         screen = ScreenState.Start;
     }
@@ -689,6 +758,7 @@ public class ScrabbleApp : MonoBehaviour
         if (showDef) DrawDefinition();
         if (showHistory) DrawHistory();
         if (GameOverPanelUp) DrawGameOver();
+        if (NetLostPanelUp) DrawNetLost();
         if (showQuitConfirm) DrawQuitConfirm();
         if (toast.Length > 0) DrawToast();
 
@@ -703,7 +773,10 @@ public class ScrabbleApp : MonoBehaviour
     // The game-over panel counts too: it's drawn after the board, so without
     // this the invisible board-cell buttons under its "New Game" button take
     // the click first and pop up a word definition instead of starting a game.
-    private bool ModalActive { get { return showBlank || showDef || showQuitConfirm || showHistory || GameOverPanelUp; } }
+    private bool ModalActive { get { return showBlank || showDef || showQuitConfirm || showHistory || GameOverPanelUp || NetLostPanelUp; } }
+
+    // True while the "connection lost" panel is on screen (online games only).
+    private bool NetLostPanelUp { get { return multiplayer && netLost && screen == ScreenState.Playing; } }
 
     // True while the end-of-game result panel is on screen.
     private bool GameOverPanelUp
@@ -877,7 +950,7 @@ public class ScrabbleApp : MonoBehaviour
         else if (net != null && !net.matchStarted)
         {
             GUI.Label(new Rect(6 * U, y, w - 12 * U, 10 * U),
-                net.IsHost ? "Waiting for opponent to join..." : "Waiting for host to start...",
+                NetIsHost ? "Waiting for opponent to join..." : "Waiting for host to start...",
                 Label((int)(3.4f * U), MUTED, TextAnchor.MiddleCenter, false));
             y += 12 * U;
         }
@@ -1557,7 +1630,7 @@ public class ScrabbleApp : MonoBehaviour
 
         if (multiplayer)
         {
-            if (net.IsHost)
+            if (NetIsHost)
             {
                 Board.Validation hv = net.HostSubmit(true, m);
                 if (!hv.ok) { Toast(hv.error); return; }
@@ -1600,7 +1673,7 @@ public class ScrabbleApp : MonoBehaviour
         RecallAll();
         if (multiplayer)
         {
-            if (net.IsHost) net.HostPass(true);
+            if (NetIsHost) net.HostPass(true);
             else { net.GuestPass(); netAwaitingResult = true; }
             return;
         }
@@ -1613,7 +1686,11 @@ public class ScrabbleApp : MonoBehaviour
         if (!exchangeMode)
         {
             if (provList.Count > 0) { Toast("Recall your tiles first"); return; }
-            if (ActiveBagSize() == 0) { Toast("Bag is empty — cannot exchange"); return; }
+            if (ActiveBagSize() < Game.MinBagForExchange)
+            {
+                Toast("You can only exchange while the bag has at least " + Game.MinBagForExchange + " tiles");
+                return;
+            }
             exchangeMode = true; exchangeSel.Clear(); selectedRack = -1;
             Toast("Tap tiles to swap, then press Confirm");
             return;
@@ -1625,7 +1702,7 @@ public class ScrabbleApp : MonoBehaviour
 
         if (multiplayer)
         {
-            if (net.IsHost) net.HostExchange(true, idx);
+            if (NetIsHost) net.HostExchange(true, idx);
             else { net.GuestExchange(idx); netAwaitingResult = true; }
             return;
         }
@@ -1791,6 +1868,23 @@ public class ScrabbleApp : MonoBehaviour
         if (GUI.Button(new Rect(box.x + box.width / 2 - 15 * U, box.y + box.height - 11 * U, 30 * U, 9 * U), "Close", Btn((int)(3.6f * U))))
         {
             showHistory = false; historyScroll = Vector2.zero;
+        }
+    }
+
+    private void DrawNetLost()
+    {
+        float w = VW;
+        Rect box = new Rect(w * 0.08f, VH * 0.32f, w * 0.84f, VH * 0.3f);
+        DrawRect(box, CARD);
+        GUI.Label(new Rect(box.x, box.y + 3 * U, box.width, 8 * U), "Connection lost",
+            Label((int)(5.5f * U), ACCENT, TextAnchor.MiddleCenter, true));
+        GUI.Label(new Rect(box.x + 5 * U, box.y + 13 * U, box.width - 10 * U, box.height - 27 * U),
+            netLostReason + "\n\nThis game can't continue. Start a new room to play again.",
+            Label((int)(3.6f * U), TEXT, TextAnchor.UpperCenter, false));
+        if (GUI.Button(new Rect(box.x + box.width / 2 - 18 * U, box.y + box.height - 11 * U, 36 * U, 9 * U),
+                "Leave game", Btn((int)(3.8f * U))))
+        {
+            LeaveMultiplayer();
         }
     }
 

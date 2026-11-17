@@ -22,6 +22,9 @@ namespace Shaderpark.Scrabble
         public ScrabbleNetworkMatch Match { get; private set; }
         public bool IsHost { get; private set; }
 
+        /// <summary>True while this client is connected to the Coherence room.</summary>
+        public bool IsConnected { get { return bridge != null && bridge.IsConnected; } }
+
         private CoherenceBridge bridge;
 
         private CoherenceBridge EnsureBridge()

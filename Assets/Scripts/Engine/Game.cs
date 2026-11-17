@@ -21,6 +21,9 @@ namespace Shaderpark.Scrabble
         // with the game so the played-words list survives a save/resume.
         public readonly List<string> plays = new List<string>();
 
+        /// <summary>Standard rule: you may only exchange while the bag holds at least this many tiles.</summary>
+        public const int MinBagForExchange = 7;
+
         private readonly Dict dict;
         private readonly Ai ai;
         private readonly System.Random rnd;
@@ -68,7 +71,7 @@ namespace Shaderpark.Scrabble
 
         public bool ExchangeHuman(int[] indices)
         {
-            if (bag.IsEmpty() || indices.Length == 0) return false;
+            if (bag.Size() < MinBagForExchange || indices.Length == 0) return false;
             int[] idx = (int[])indices.Clone();
             System.Array.Sort(idx);
             List<char> removed = new List<char>();

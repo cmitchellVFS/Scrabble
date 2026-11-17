@@ -22,7 +22,9 @@ Assets/
                        Wiktionary (CC BY-SA 4.0), Open English WordNet (CC BY 4.0),
                        Webster's 1913 (public domain), UWU (MIT). Inflections are
                        stored as ">BASE|note" pointers that ScrabbleApp follows.
-    DEFINITIONS_CREDITS.txt  Full sources/licences for defs.tsv
+    wordfreq.tsv       How common each word is (wordfreq, CC BY-SA 4.0); limits a
+                       low-ELO AI to words a beginner would know
+    DEFINITIONS_CREDITS.txt  Full sources/licences for defs.tsv and wordfreq.tsv
 Packages/manifest.json
 ProjectSettings/ProjectVersion.txt
 ```
@@ -31,7 +33,9 @@ ProjectSettings/ProjectVersion.txt
 - Full 15×15 board with premium squares, tile bag, racks, scoring
   (cross-words, letter/word premiums, 50-point bingo), pass, exchange.
 - Real move-generating AI (Appel–Jacobson) whose strength scales with the ELO
-  you enter (300 ≈ beginner … 2000 ≈ expert).
+  you enter (300 ≈ beginner … 2100 ≈ expert). Low ratings only play everyday
+  words; higher ratings value the tiles they keep (blanks/S good, Q/V/duplicates
+  bad) and swap a bad rack. Exchanges need at least 7 tiles in the bag.
 - Tile point values shown on the rack; AI tiles animate dropping into place.
 - Tap any played word to see its meaning (offline).
 - Manual rack rearranging (Arrange), shuffle, and one-game save/resume.

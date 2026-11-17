@@ -64,7 +64,7 @@ namespace Shaderpark.Scrabble
 
         public bool Exchange(bool isA, int[] indices)
         {
-            if (bag.IsEmpty() || indices.Length == 0) return false;
+            if (bag.Size() < Game.MinBagForExchange || indices.Length == 0) return false;
             List<char> rack = RackOf(isA);
             int[] idx = (int[])indices.Clone();
             System.Array.Sort(idx);

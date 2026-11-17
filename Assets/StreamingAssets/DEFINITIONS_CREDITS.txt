@@ -28,3 +28,12 @@ show "no definition available offline".
 
 Inflection, spelling-variant (-ise/-ize etc.), prefix/suffix and compound pointers were
 generated automatically from the word list and the sources above.
+
+Word frequency (wordfreq.tsv, used by the AI)
+=============================================
+wordfreq.tsv lists how common each playable word is in real-world English (Zipf
+frequency x 10), so a low-ELO computer opponent only plays words a beginner would know.
+Generated from wordfreq 3.1.1 by Robyn Speer - https://github.com/rspeer/wordfreq
+Data licence: CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/);
+wordfreq code: Apache-2.0. Includes data from SUBTLEX, Wikipedia, OpenSubtitles and
+other sources credited in the wordfreq README.

@@ -43,6 +43,7 @@ namespace Shaderpark.Scrabble
         private PvpGame game; // non-null only on the host
         private ClientID guestClientId;
         private bool guestKnown;
+        private bool guestLeft;
 
         private void Awake()
         {
@@ -52,13 +53,28 @@ namespace Shaderpark.Scrabble
         private void OnEnable()
         {
             CoherenceBridge bridge = sync != null ? sync.CoherenceBridge : null;
-            if (bridge != null) bridge.ClientConnections.OnCreated += OnClientConnected;
+            if (bridge != null)
+            {
+                bridge.ClientConnections.OnCreated += OnClientConnected;
+                bridge.ClientConnections.OnDestroyed += OnClientDisconnected;
+            }
         }
 
         private void OnDisable()
         {
             CoherenceBridge bridge = sync != null ? sync.CoherenceBridge : null;
-            if (bridge != null) bridge.ClientConnections.OnCreated -= OnClientConnected;
+            if (bridge != null)
+            {
+                bridge.ClientConnections.OnCreated -= OnClientConnected;
+                bridge.ClientConnections.OnDestroyed -= OnClientDisconnected;
+            }
+        }
+
+        // Host side: the guest's connection went away (phone slept, app closed,
+        // network dropped). The UI reads GuestLeft and shows "connection lost".
+        private void OnClientDisconnected(CoherenceClientConnection conn)
+        {
+            if (guestKnown && !conn.IsMyConnection && conn.ClientId.Equals(guestClientId)) guestLeft = true;
         }
 
         private void OnClientConnected(CoherenceClientConnection conn)
@@ -69,8 +85,16 @@ namespace Shaderpark.Scrabble
             sync.TransferAuthority(guestClientId, AuthorityType.Input);
         }
 
+        // NOTE: Coherence's HasStateAuthority returns TRUE once the entity is no
+        // longer synced (e.g. the host disconnected), so a guest would suddenly
+        // look like the host. The UI uses NetworkSession.IsHost (fixed when the
+        // room is created/joined) instead of this.
         public bool IsHost { get { return sync.HasStateAuthority; } }
         public bool GuestConnected { get { return guestKnown; } }
+        public bool GuestLeft { get { return guestLeft; } }
+
+        /// <summary>False once this match entity is no longer live on the network (e.g. its host disconnected).</summary>
+        public bool IsSynchronized { get { return sync != null && sync.IsSynchronizedWithNetwork; } }
 
         /// <summary>Host only: begins the authoritative match once a guest is present.</summary>
         public void HostStartMatch(Dict dict, long seed)
@@ -112,6 +136,12 @@ namespace Shaderpark.Scrabble
             {
                 PushPublicState();
                 if (!isA) SendGuestRack();
+            }
+            else
+            {
+                // Tell the requester (the guest waits on errorSeq) instead of hanging.
+                lastError = "You can only exchange while the bag has at least " + Game.MinBagForExchange + " tiles";
+                errorSeq++;
             }
             return ok;
         }
