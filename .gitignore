@@ -110,3 +110,8 @@ InitTestScene*.unity*
 
 # Claude Code machine-local settings
 .claude/settings.local.json
+
+# Python build/cache output from the bundled MCP for Unity server (Server/)
+__pycache__/
+*.py[cod]
+*.egg-info/
