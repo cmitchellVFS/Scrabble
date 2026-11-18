@@ -32,6 +32,9 @@ ProjectSettings/ProjectVersion.txt
 ## Features
 - Full 15×15 board with premium squares, tile bag, racks, scoring
   (cross-words, letter/word premiums, 50-point bingo), pass, exchange.
+- Version number on the start screen (MAJOR.MINOR.BUILD, e.g. 1.1.4). Every
+  Android build bumps BUILD automatically (Editor/AndroidVersionBump.cs); set
+  MAJOR.MINOR yourself in Player Settings > Version for bigger releases.
 - Real move-generating AI (Appel–Jacobson) whose strength scales with the ELO
   you enter (300 ≈ beginner … 2100 ≈ expert). Low ratings only play everyday
   words; higher ratings value the tiles they keep (blanks/S good, Q/V/duplicates

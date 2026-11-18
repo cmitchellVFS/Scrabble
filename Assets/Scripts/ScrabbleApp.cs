@@ -905,6 +905,20 @@ public class ScrabbleApp : MonoBehaviour
             "All 7 tiles = +50.\n\n" +
             "Arrange reorders your rack. Tap a word on the board to see its meaning.",
             Label((int)(3 * U), MUTED, TextAnchor.UpperLeft, false));
+
+        // Version (MAJOR.MINOR.BUILD), set by the build script on every Android
+        // build -- see Editor/AndroidVersionBump.cs.
+        GUI.Label(new Rect(0, VH - 9 * U, w, 6 * U), VersionLabel(),
+            Label((int)(3 * U), MUTED, TextAnchor.MiddleCenter, false));
+    }
+
+    private static string VersionLabel()
+    {
+#if UNITY_EDITOR
+        return "Version " + Application.version + " (editor)";
+#else
+        return "Version " + Application.version;
+#endif
     }
 
     private void DrawMpLobby()
