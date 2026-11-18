@@ -49,6 +49,7 @@ namespace Shaderpark.Scrabble
             // Moves arriving from the UI/network carry no word; recover it.
             if (m.word.Length == 0 && v.words.Count > 0) m.word = v.words[0];
             lastEvent = (isA ? "A" : "B") + " played " + m.word + " for " + v.score;
+            if (m.TilesPlaced() == 7) lastEvent += " (bingo)";
             if (rack.Count == 0 && bag.IsEmpty()) FinishByGoingOut(isA);
             else turnA = !isA;
             return v;

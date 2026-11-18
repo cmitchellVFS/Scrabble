@@ -207,8 +207,13 @@ public class ScrabbleApp : MonoBehaviour
         else
         {
             bool touching = Input.touchCount > 0 || Input.GetMouseButton(0);
+            // Menus (start screen, online lobby) have nothing animating, so they
+            // idle like the board does -- except while a text field (ELO, room
+            // code) has focus, so typing stays responsive. Loading stays fast.
+            bool menuActive = screen == ScreenState.Loading ||
+                (screen != ScreenState.Playing && GUIUtility.keyboardControl != 0);
             bool interactive = touching || animating || scoreAnimActive || dragMoved
-                || toast.Length > 0 || screen != ScreenState.Playing
+                || toast.Length > 0 || menuActive
                 || (netSession != null && netSession.IsConnecting);
             if (interactive) fps = FpsInteractive;
             else if (multiplayer) fps = FpsMultiplayerIdle;
@@ -755,9 +760,11 @@ public class ScrabbleApp : MonoBehaviour
             case ScreenState.Playing: DrawGame(); break;
         }
         if (showBlank) DrawBlankChooser();
+        // The end-of-game summary goes under the definition popup, because its
+        // word list opens definitions. (Its controls are disabled while one is open.)
+        if (GameOverPanelUp) DrawGameOver();
         if (showDef) DrawDefinition();
         if (showHistory) DrawHistory();
-        if (GameOverPanelUp) DrawGameOver();
         if (NetLostPanelUp) DrawNetLost();
         if (showQuitConfirm) DrawQuitConfirm();
         if (toast.Length > 0) DrawToast();
@@ -1818,6 +1825,14 @@ public class ScrabbleApp : MonoBehaviour
     }
 
     private Vector2 defScroll;
+    private void ShowWordDefinition(string w)
+    {
+        string def = LookupDef(w);
+        defText = w + ":\n" + (def ?? "Valid word — no definition available offline.");
+        defScroll = Vector2.zero;
+        showDef = true;
+    }
+
     private void DrawDefinition()
     {
         float w = VW;
@@ -1888,29 +1903,128 @@ public class ScrabbleApp : MonoBehaviour
         }
     }
 
+    // ------------------------------------------------------------------
+    // End-of-game summary
+    // ------------------------------------------------------------------
+
+    private sealed class PlayerSummary
+    {
+        public int plays, total, bingos, bestScore = -1;
+        public string bestWord = "";
+        public readonly List<string> words = new List<string>(); // unique, in play order
+        public string Avg { get { return plays > 0 ? ((float)total / plays).ToString("0.0") : "–"; } }
+        public string Best { get { return bestScore >= 0 ? bestWord + " (" + bestScore + ")" : "–"; } }
+    }
+
+    private Vector2 summaryScroll;
+
+    // Builds per-player stats from the play log ("You played CAT for 10",
+    // "AI played QUIZ for 64 (bingo)"; online: "A played ..." / "B played ...").
+    private void BuildSummary(out PlayerSummary me, out PlayerSummary opp)
+    {
+        me = new PlayerSummary();
+        opp = new PlayerSummary();
+        string mine = multiplayer ? (NetIsHost ? "A" : "B") : "You";
+        List<string> hist = ActivePlayHistory();
+        for (int i = 0; i < hist.Count; i++)
+        {
+            string line = hist[i];
+            int p = line.IndexOf(" played ");
+            int f = line.LastIndexOf(" for ");
+            if (p <= 0 || f <= p + 8) continue;
+            string who = line.Substring(0, p);
+            string word = line.Substring(p + 8, f - (p + 8));
+            string rest = line.Substring(f + 5);
+            int sp = rest.IndexOf(' ');
+            int pts;
+            if (!int.TryParse(sp > 0 ? rest.Substring(0, sp) : rest, out pts)) continue;
+            PlayerSummary s = who == mine ? me : opp;
+            s.plays++;
+            s.total += pts;
+            if (rest.EndsWith("(bingo)")) s.bingos++;
+            if (pts > s.bestScore) { s.bestScore = pts; s.bestWord = word; }
+            if (!s.words.Contains(word)) s.words.Add(word);
+        }
+    }
+
     private void DrawGameOver()
     {
         float w = VW;
-        Rect box = new Rect(w * 0.1f, VH * 0.32f, w * 0.8f, VH * 0.32f);
+        Rect box = new Rect(w * 0.05f, VH * 0.1f, w * 0.9f, VH * 0.8f);
         DrawRect(box, CARD);
+        // A definition opened from the word list is drawn on top of this panel;
+        // disable these controls meanwhile so they don't take its clicks.
+        bool prevEnabled = GUI.enabled;
+        GUI.enabled = !showDef;
+
         int myScore = ActiveMyScore();
         int oppScore = ActiveOppScore();
+        string oppName = multiplayer ? "Opponent" : "AI";
         string result = myScore > oppScore ? "You win!" :
             (oppScore > myScore ? (multiplayer ? "Opponent wins." : "AI wins.") : "It's a tie.");
-        GUI.Label(new Rect(box.x, box.y + 3 * U, box.width, 8 * U), result,
+        GUI.Label(new Rect(box.x, box.y + 2 * U, box.width, 8 * U), result,
             Label((int)(5.5f * U), ACCENT, TextAnchor.MiddleCenter, true));
-        GUI.Label(new Rect(box.x, box.y + 12 * U, box.width, 8 * U),
-            "You " + myScore + "   ·   " + (multiplayer ? "Opp " : "AI ") + oppScore,
+        GUI.Label(new Rect(box.x, box.y + 10 * U, box.width, 7 * U),
+            "You " + myScore + "   ·   " + oppName + " " + oppScore,
             Label((int)(4 * U), TEXT, TextAnchor.MiddleCenter, false));
+
+        // Stats table: label | You | AI/Opponent.
+        PlayerSummary me, opp;
+        BuildSummary(out me, out opp);
+        float x0 = box.x + 4 * U, tw = box.width - 8 * U;
+        float c0 = tw * 0.3f, c1 = tw * 0.35f;
+        float y = box.y + 20 * U, rh = 6 * U;
+        int fs = (int)(3.4f * U);
+        GUIStyle head = Label(fs, MUTED, TextAnchor.MiddleLeft, true);
+        GUIStyle cell = Label(fs, TEXT, TextAnchor.MiddleLeft, false);
+        GUI.Label(new Rect(x0 + c0, y, c1, rh), "You", head);
+        GUI.Label(new Rect(x0 + c0 + c1, y, c1, rh), oppName, head);
+        string[] labels = { "Best word", "Bingos", "Avg per play", "Words played" };
+        string[] mine = { me.Best, me.bingos.ToString(), me.Avg, me.plays.ToString() };
+        string[] theirs = { opp.Best, opp.bingos.ToString(), opp.Avg, opp.plays.ToString() };
+        for (int i = 0; i < labels.Length; i++)
+        {
+            y += rh;
+            GUI.Label(new Rect(x0, y, c0, rh), labels[i], Label(fs, MUTED, TextAnchor.MiddleLeft, false));
+            GUI.Label(new Rect(x0 + c0, y, c1, rh), mine[i], cell);
+            GUI.Label(new Rect(x0 + c0 + c1, y, c1, rh), theirs[i], cell);
+        }
+
+        // Your words as buttons -- tap one to see what it means.
+        y += rh + 3 * U;
+        GUI.Label(new Rect(x0, y, tw, rh), me.words.Count > 0 ? "Your words — tap one for its meaning" : "You didn't play any words.",
+            Label(fs, MUTED, TextAnchor.MiddleLeft, false));
+        y += rh + U;
+        Rect area = new Rect(x0, y, tw, box.y + box.height - 14 * U - y);
+        float bh = 7.5f * U, gap = 1.5f * U, innerW = area.width - 4 * U;
+        GUIStyle wb = Btn((int)(3.2f * U));
+        // Lay buttons out left-to-right, wrapping to new rows.
+        List<Rect> rects = new List<Rect>(me.words.Count);
+        float cx = 0, cy = 0;
+        for (int i = 0; i < me.words.Count; i++)
+        {
+            float bw = Mathf.Max(14 * U, me.words[i].Length * 2.7f * U + 5 * U);
+            if (cx > 0 && cx + bw > innerW) { cx = 0; cy += bh + gap; }
+            rects.Add(new Rect(cx, cy, bw, bh));
+            cx += bw + gap;
+        }
+        float contentH = me.words.Count > 0 ? cy + bh : 0;
+        summaryScroll = GUI.BeginScrollView(area, summaryScroll, new Rect(0, 0, innerW, Mathf.Max(area.height, contentH)));
+        for (int i = 0; i < me.words.Count; i++)
+            if (GUI.Button(rects[i], me.words[i], wb)) ShowWordDefinition(me.words[i]);
+        GUI.EndScrollView();
+
         if (GUI.Button(new Rect(box.x + box.width / 2 - 18 * U, box.y + box.height - 11 * U, 36 * U, 9 * U), "New Game", Btn((int)(3.8f * U))))
         {
             // Don't carry a definition/history overlay opened before the game
             // ended over onto the start screen.
             showDef = false; defScroll = Vector2.zero;
             showHistory = false; historyScroll = Vector2.zero;
+            summaryScroll = Vector2.zero;
             if (multiplayer) LeaveMultiplayer();
             else { DeleteSave(); screen = ScreenState.Start; }
         }
+        GUI.enabled = prevEnabled;
     }
 
     private void DrawQuitConfirm()

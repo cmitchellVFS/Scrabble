@@ -12,4 +12,5 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fe206545a28be2142b8fa937387721e8, type: 3}
   m_Name: CoherenceSyncConfigRegistry
   m_EditorClassIdentifier: Coherence.Toolkit::Coherence.Toolkit.CoherenceSyncConfigRegistry
-  storedConfigs: []
+  storedConfigs:
+  - {fileID: 11400000, guid: fdcb6fd3f11d41a4fad07d35f3a2d183, type: 2}

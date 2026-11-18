@@ -55,6 +55,7 @@ namespace Shaderpark.Scrabble
             // generator sets it); recover the main word from the validation.
             if (m.word.Length == 0 && v.words.Count > 0) m.word = v.words[0];
             lastEvent = "You played " + m.word + " for " + v.score;
+            if (m.TilesPlaced() == 7) lastEvent += " (bingo)";
             plays.Add(lastEvent);
             if (humanRack.Count == 0 && bag.IsEmpty()) FinishByGoingOut(true);
             else humanTurn = false;
@@ -134,6 +135,7 @@ namespace Shaderpark.Scrabble
                 bag.Fill(aiRack, 7);
                 scoreless = 0;
                 desc = "AI played " + m.word + " for " + m.score;
+                if (m.TilesPlaced() == 7) desc += " (bingo)";
                 plays.Add(desc);
             }
             lastEvent = desc;
